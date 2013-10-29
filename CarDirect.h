@@ -2,6 +2,7 @@
 #define CARDIRECT_H_
 
 #include <Arduino.h>
+#include <DistanceSensor.h>
 
 const byte AXES  = 2;
 
@@ -18,11 +19,17 @@ const byte SPEED_PIN = 0;
 const byte DIR_PIN   = 1;
 const byte BRAKE_PIN = 2;
 
+const int DISTANCE_SENSOR_CHECK_INTERVAL  = 10; // ms
+const int DISTANCE_SENSOR_MIN_DISTANCE    = 5; // cm
+const int DISTANCE_SENSOR_PROBE_MAX       = 20; // попытки поиска пути
+const int DISTANCE_SENSOR_PROBE_INTERVAL  = 300; // интервал между попытками поиска пути
+
 struct Wheel {
     byte speed_pin;
     byte dir_pin;
     byte brake_pin;
-    byte speed;
+    float speed;
+    float speed_step;
     byte dir;
 };
 
@@ -33,12 +40,38 @@ private:
         [2]    // сторона LEFT | RIGHT
         [AXES];    // ось колеса начиная с передней части, FRONT | REAR
     byte _can_brake;
-    int _max_speed;
-public:
-    CarDirect ( byte wheels_cnt, byte wheels[][5], int max_speed = 4000 ) {
-        this->_max_speed = max_speed;
-                this->_can_brake = 1;
+    float _max_speed;
+    unsigned int _stop_fluent_tick;
+    DistanceSensor *_front_sensor;
+    DistanceSensor *_rear_sensor;
 
+    int delay_checking_sensors( byte dir, int delay_ms ) {
+        if (   dir == FORWARD  && !_front_sensor
+            || dir == BACKWARD && !_rear_sensor ) {
+            delay( delay_ms );
+            return -1;
+        }
+
+        DistanceSensor *sensor = dir == FORWARD ? _front_sensor : _rear_sensor;
+
+        int checks = delay_ms / DISTANCE_SENSOR_CHECK_INTERVAL;
+
+        for ( int check = 0; check < checks; check++ ) {
+            if ( sensor->getDistanceCentimeter() < DISTANCE_SENSOR_MIN_DISTANCE ) {
+                this->stop();
+                break;
+            }
+            
+            delay( DISTANCE_SENSOR_CHECK_INTERVAL );
+        }
+
+        return sensor->getDistanceCentimeter();
+    }
+public:
+    CarDirect( byte wheels_cnt, byte wheels[][5], float max_speed = 4000,
+        DistanceSensor *front_sensor = 0 , DistanceSensor *rear_sensor = 0 )
+        : _max_speed( max_speed ), _can_brake( 1 ), _front_sensor( front_sensor ), _rear_sensor( rear_sensor )
+     {
         for ( byte i = 0; i < wheels_cnt; i++ ) {
             Wheel &wheel = this->_wheels[ wheels[i][0] ][ wheels[i][1] ];
             wheel.speed_pin = wheels[i][2];
@@ -72,7 +105,7 @@ public:
         return *this;
     }
 
-    CarDirect &rotate_wheel( byte side, byte axis, byte dir, int speed, int delay_ms = 0 ) {
+    CarDirect &rotate_wheel( byte side, byte axis, byte dir, float speed, int delay_ms = 0 ) {
         this->brake_wheel( side, axis, 0, 0 );
 
         Wheel &wheel = this->_wheels[ side ][ axis ];
@@ -98,7 +131,7 @@ public:
         return *this;
     }
 
-    CarDirect &rotate_axis( byte axis, byte dir, int speed, int delay_ms = 0 ) {
+    CarDirect &rotate_axis( byte axis, byte dir, float speed, int delay_ms = 0 ) {
         this->rotate_wheel( LEFT , axis, dir, speed );
         this->rotate_wheel( RIGHT, axis, dir, speed );
 
@@ -110,7 +143,7 @@ public:
         return *this;
     }
 
-    CarDirect &rotate_side( byte side, byte dir, int speed, int delay_ms = 0 ) {
+    CarDirect &rotate_side( byte side, byte dir, float speed, int delay_ms = 0 ) {
         for ( byte axis = 0; axis < AXES; axis++ ) {
             this->rotate_wheel( side, axis, dir, speed );
         }
@@ -126,12 +159,18 @@ public:
     //             1.0 -- колеса крутятся вперёд с указанной максимальной скоростью (по умолчанию)
     //           0.0 -- колеса неподвижны
     //            -1.0 -- колеса крутятся назад с указанной максимальной скоростью
-    CarDirect &go( int speed, int delay_ms = 0, float left_coef = 1.0, float right_coef = 1.0 ) {
+    CarDirect &go( float speed, int delay_ms = 0, float left_coef = 1.0, float right_coef = 1.0 ) {
         this->rotate_side( LEFT , left_coef  >= 0.0 ? FORWARD : BACKWARD, int( abs( speed ) * left_coef  ) );
         this->rotate_side( RIGHT, right_coef >= 0.0 ? FORWARD : BACKWARD, int( abs( speed ) * right_coef ) );
 
         if ( delay_ms ) {
-            delay( delay_ms );
+            if ( left_coef * right_coef > 1 ) {
+                // если едем вперед или назад, то используем датчики расстояния
+                this->delay_checking_sensors( left_coef  >= 0.0 ? FORWARD : BACKWARD, delay_ms );
+            }
+            else {
+                delay( delay_ms );
+            }
         }
 
         return *this;
@@ -151,94 +190,120 @@ public:
         return *this;
     }
 
-    CarDirect &stop_fluently( int in_ms ) {
-        const int tick = 50; // интервал времени между изменениями скорости
-        const int cycles = in_ms / 50 || 1;
+    CarDirect &stop_fluently_init( unsigned int stop_fluent_time, unsigned int stop_fluent_tick  ) {
+        _stop_fluent_tick = stop_fluent_tick;
 
-        float speed_step[2][AXES];
-        float speed     [2][AXES];
+        int cycles = stop_fluent_time / stop_fluent_tick || 1;
 
         // Расчёт шага изменения скорости
         for ( byte axis = 0; axis < AXES; axis++ ) {
             for ( byte side = LEFT; side < RIGHT; side++  ) {
-                speed     [ side ][ axis ] = this->_wheels[ side ][ axis ].speed;
-                speed_step[ side ][ axis ] = speed[ side ][ axis ] / cycles;
+                this->_wheels[ side ][ axis ].speed_step = -1 * this->_wheels[ side ][ axis ].speed / cycles;
+            }
+        }
+    }
+
+    CarDirect &stop_fluently_tick( unsigned int stop_fluent_tick ) {
+        for ( byte axis = 0; axis < AXES; axis++ ) {
+            for ( byte side = LEFT; side < RIGHT; side++  ) {
+                this->rotate_wheel(
+                    side,
+                    axis,
+                    this->_wheels[ side  ][ axis ].dir,
+                    this->_wheels[ side  ][ axis ].speed + this->_wheels[ side  ][ axis ].speed_step
+                );
             }
         }
 
-        for ( int cycle = 0; cycle < cycles; cycle++ ) {
-            for ( byte axis = 0; axis < AXES; axis++ ) {
-                for ( byte side = LEFT; side < RIGHT; side++  ) {
-                    speed[ side  ][ axis ] -= speed_step[ side  ][ axis ];
-                    this->rotate_wheel( side , axis, this->_wheels[ side  ][ axis ].dir, int( speed[ side  ][ axis ] ) );
-                }
-            }
-
-            delay( tick );
-        }
-
-        this->stop(); // чтобы уж точно ))
+        delay( _stop_fluent_tick );
 
         return *this;
     }
 
-    CarDirect &forward( int speed, int delay_ms = 0 ) {
+    CarDirect &forward( float speed, int delay_ms = 0 ) {
         this->go( speed, delay_ms, 1.0, 1.0 );
 
         return *this;
     }
 
-    CarDirect &backward( int speed, int delay_ms = 0 ) {
+    CarDirect &backward( float speed, int delay_ms = 0 ) {
         this->go( speed, delay_ms, -1.0, -1.0 );
 
         return *this;
     }
 
-    CarDirect &rotate_left( int speed, int delay_ms = 0 ) {
+    CarDirect &rotate_left( float speed, int delay_ms = 0 ) {
         this->go( speed, delay_ms, -1.0, 1.0 );
 
         return *this;
     }
 
-    CarDirect &rotate_right( int speed, int delay_ms = 0 ) {
+    CarDirect &rotate_right( float speed, int delay_ms = 0 ) {
         this->go( speed, delay_ms, 1.0, -1.0 );
 
         return *this;
     }
 
     // Повернуть с буксом во время движения при помощи большей скорости внешних колёс
-    CarDirect &drift( byte side, byte dir, int speed, int delay_ms = 0, float coef = 0.5 ) {
+    CarDirect &drift( byte side, byte dir, float speed, int delay_ms = 0, float coef = 0.5 ) {
         float dir_coef = dir == FORWARD ? 1 : -1;
 
         this->go(
             speed,
             delay_ms,
-            byte( dir_coef * speed * ( side == LEFT  ? coef : 1.0 ) ), // left_coef
-            byte( dir_coef * speed * ( side == RIGHT ? coef : 1.0 ) )  // right_coef
+            dir_coef * speed * ( side == LEFT  ? coef : 1.0 ), // left_coef
+            dir_coef * speed * ( side == RIGHT ? coef : 1.0 )  // right_coef
         );
 
         return *this;
     }
 
     // drift sugar
-    CarDirect &drift_forward_left( int speed, int delay_ms = 0, float coef = 0.5 ) {
+    CarDirect &drift_forward_left( float speed, int delay_ms = 0, float coef = 0.5 ) {
         this->drift( LEFT, FORWARD, speed, coef );
         return *this;
     }
-    CarDirect &drift_forward_right( int speed, int delay_ms = 0, float coef = 0.5 ) {
+    CarDirect &drift_forward_right( float speed, int delay_ms = 0, float coef = 0.5 ) {
         this->drift( RIGHT, FORWARD, speed, delay_ms, coef );
         return *this;
     }
-    CarDirect &drift_backward_left( int speed, int delay_ms = 0, float coef = 0.5 ) {
+    CarDirect &drift_backward_left( float speed, int delay_ms = 0, float coef = 0.5 ) {
         this->drift( LEFT, BACKWARD, speed, delay_ms, coef );
         return *this;
     }
-    CarDirect &drift_backward_right( int speed, int delay_ms = 0, float coef = 0.5 ) {
+    CarDirect &drift_backward_right( float speed, int delay_ms = 0, float coef = 0.5 ) {
         this->drift( RIGHT, BACKWARD, speed, delay_ms, coef );
         return *this;
     }
 
-    // TODO движение по датчикам -- ехать до препятствия и т.д.
+    // поворачиваем машину передом в пустое пространсвто
+    bool search_path() {
+        if ( !_front_sensor ) {
+            this->stop();
+            return false;
+        }
+
+        // Будем крутиться в случайную сторону
+        byte dir = random( 0, 1 );
+        byte try_num = 0;
+        while ( _front_sensor->isCloser( DISTANCE_SENSOR_MIN_DISTANCE * 10 ) ) {
+            if ( try_num++ > DISTANCE_SENSOR_PROBE_MAX ) {
+                // Замуровали демоны!!!
+                this->stop();
+                return false;                
+            }
+
+            if ( dir ) {
+                this->rotate_left( _max_speed * 0.5, DISTANCE_SENSOR_PROBE_INTERVAL );
+            }
+            else {
+                this->rotate_right( _max_speed * 0.5, DISTANCE_SENSOR_PROBE_INTERVAL );   
+            }
+        }
+
+        return true;
+    }
+
 }; // class CarDirect
 
 #endif // CARDIRECT_H_
