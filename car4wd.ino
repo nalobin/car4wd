@@ -15,17 +15,17 @@ bool is_stopping_fluently = false;
 // переводит расстояние в см и скорость в скорость и время в мс
 #define l2t( speed, length ) ( speed ), ( ( length ) / ( speed ) * 60000 )
 
+const byte AXIS = 0;
+
 byte wheels[][5] = {
-    { LEFT , FRONT, 10, 11, 0 },
-    { LEFT , REAR , 12, 13, 0 },
-    { RIGHT, FRONT, 14, 15, 0 },
-    { RIGHT, REAR , 16, 17, 0 }
+    { RIGHT, AXIS, 3, 2, 4 },
+    { LEFT , AXIS, 5, 6, 7 },
 };
 
 DistanceSRF04 front_sensor;
-CarDirect car( 4, wheels, MAX_SPEED, &front_sensor );
+CarDirect car( 1, wheels, MAX_SPEED, &front_sensor );
 
-const int IR_RECV_PIN = 9;
+const int IR_RECV_PIN = 0;
 IRrecv irrecv( IR_RECV_PIN );
 decode_results results;
 
@@ -53,7 +53,7 @@ void setup() {
     Serial.setTimeout( 50 );
     irrecv.enableIRIn(); // Start the IR receiver
     
-    front_sensor.begin( 1, 2 ); // echo & trigger pins
+    front_sensor.begin( 8, 9 ); // echo & trigger pins
 
     test_predefined_drive();
     // autopilot();

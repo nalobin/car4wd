@@ -4,20 +4,13 @@
 #include <Arduino.h>
 #include <DistanceSensor.h>
 
-const byte AXES  = 2;
-
-const byte FRONT = 0;
-const byte REAR  = AXES - 1;
+const byte MAX_AXES = 3;
 
 const byte LEFT  = 0;
 const byte RIGHT = 1;
 
 const byte FORWARD  = LOW;
 const byte BACKWARD = HIGH;
-
-const byte SPEED_PIN = 0;
-const byte DIR_PIN   = 1;
-const byte BRAKE_PIN = 2;
 
 const int DISTANCE_SENSOR_CHECK_INTERVAL  = 10; // ms
 const int DISTANCE_SENSOR_MIN_DISTANCE    = 5; // cm
@@ -26,8 +19,8 @@ const int DISTANCE_SENSOR_PROBE_INTERVAL  = 300; // интервал между 
 
 struct Wheel {
     byte speed_pin;
-    byte dir_pin;
-    byte brake_pin;
+    byte dir_pin1;
+    byte dir_pin2;
     float speed;
     float speed_step;
     byte dir;
@@ -36,10 +29,10 @@ struct Wheel {
 // Класс n-осевой тачки с попарными неповоротными колёсами
 class CarDirect {
 private:
-    Wheel _wheels
-        [2]    // сторона LEFT | RIGHT
-        [AXES];    // ось колеса начиная с передней части, FRONT | REAR
-    byte _can_brake;
+    byte _axes;
+    Wheel _wheels    // колёса
+        [2]          // сторона LEFT | RIGHT
+        [MAX_AXES];  // индекс оси колеса; 0 - передняя ось
     float _max_speed;
     unsigned int _stop_fluent_tick;
     DistanceSensor *_front_sensor;
@@ -68,29 +61,23 @@ private:
         return sensor->getDistanceCentimeter();
     }
 public:
-    CarDirect( byte wheels_cnt, byte wheels[][5], float max_speed = 4000,
+    CarDirect( byte axes, byte wheels[][5], float max_speed = 4000,
         DistanceSensor *front_sensor = 0 , DistanceSensor *rear_sensor = 0 )
-        : _max_speed( max_speed ), _can_brake( 1 ), _front_sensor( front_sensor ), _rear_sensor( rear_sensor )
+        : _axes( axes ), _max_speed( max_speed ), _front_sensor( front_sensor ), _rear_sensor( rear_sensor )
      {
-        for ( byte i = 0; i < wheels_cnt; i++ ) {
+        for ( byte i = 0; i < _axes * 2; i++ ) {
             Wheel &wheel = this->_wheels[ wheels[i][0] ][ wheels[i][1] ];
             wheel.speed_pin = wheels[i][2];
-            wheel.dir_pin   = wheels[i][3];
-            wheel.brake_pin = wheels[i][4];
+            wheel.dir_pin1  = wheels[i][3];
+            wheel.dir_pin2  = wheels[i][4];
             wheel.speed     = 0;
             wheel.dir       = FORWARD;
-
-            this->_can_brake &= wheel.brake_pin;
         }
     }
 
     // Низкоуровневое управление
     CarDirect &brake_wheel( byte side, byte axis, byte brake = 1, int delay_ms = 0 ) {
         Wheel &wheel = this->_wheels[ side ][ axis ];
-
-        if ( this->_can_brake ) {
-            digitalWrite( wheel.brake_pin, brake ? HIGH : LOW );
-        }
 
         if ( brake ) {
             analogWrite( wheel.speed_pin, 0 );
@@ -110,16 +97,19 @@ public:
 
         Wheel &wheel = this->_wheels[ side ][ axis ];
 
-        if ( this->_wheels[ side ][ axis ].dir_pin ) {
-            digitalWrite( wheel.dir_pin, dir );
-        }
+        // Считаем что правые колеса движутся вперед при подаче на первый dir_pin HIGH,
+        // а левые при подаче на 2ой
+        byte forward = dir == FORWARD ^ side == LEFT ? HIGH : LOW;
+
+        digitalWrite( wheel.dir_pin1, forward  );
+        digitalWrite( wheel.dir_pin2, !forward );
 
         speed = min( speed, _max_speed );
         speed = max( speed, 0          );
 
         byte analog_speed = byte( 0xFF * speed / _max_speed );
 
-        analogWrite( wheel.dir_pin, analog_speed );
+        analogWrite( wheel.speed_pin, analog_speed );
 
         wheel.speed = speed;
         wheel.dir = dir;
@@ -144,7 +134,7 @@ public:
     }
 
     CarDirect &rotate_side( byte side, byte dir, float speed, int delay_ms = 0 ) {
-        for ( byte axis = 0; axis < AXES; axis++ ) {
+        for ( byte axis = 0; axis < _axes; axis++ ) {
             this->rotate_wheel( side, axis, dir, speed );
         }
 
@@ -178,7 +168,7 @@ public:
 
     // Высокоуровневое управление
     CarDirect &stop( int delay_ms = 0 ) {
-        for ( byte axis = 0; axis < AXES; axis++ ) {
+        for ( byte axis = 0; axis < _axes; axis++ ) {
             this->brake_wheel( LEFT , axis, 1 );
             this->brake_wheel( RIGHT, axis, 1 );
         }
@@ -196,7 +186,7 @@ public:
         int cycles = stop_fluent_time / stop_fluent_tick || 1;
 
         // Расчёт шага изменения скорости
-        for ( byte axis = 0; axis < AXES; axis++ ) {
+        for ( byte axis = 0; axis < _axes; axis++ ) {
             for ( byte side = LEFT; side < RIGHT; side++  ) {
                 this->_wheels[ side ][ axis ].speed_step = -1 * this->_wheels[ side ][ axis ].speed / cycles;
             }
@@ -204,7 +194,7 @@ public:
     }
 
     CarDirect &stop_fluently_tick( unsigned int stop_fluent_tick ) {
-        for ( byte axis = 0; axis < AXES; axis++ ) {
+        for ( byte axis = 0; axis < _axes; axis++ ) {
             for ( byte side = LEFT; side < RIGHT; side++  ) {
                 this->rotate_wheel(
                     side,
