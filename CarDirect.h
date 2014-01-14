@@ -12,6 +12,9 @@ const byte RIGHT = 1;
 const byte FORWARD  = LOW;
 const byte BACKWARD = HIGH;
 
+const byte BEFORE = 0;
+const byte AFTER  = 1;
+
 const int DISTANCE_SENSOR_CHECK_INTERVAL  = 10; // ms
 const int DISTANCE_SENSOR_MIN_DISTANCE    = 5; // cm
 const int DISTANCE_SENSOR_PROBE_MAX       = 20; // попытки поиска пути
@@ -26,6 +29,8 @@ struct Wheel {
     byte dir;
 };
 
+typedef void ( *GoCallback )( float );
+
 // Класс n-осевой тачки с попарными неповоротными колёсами
 class CarDirect {
 private:
@@ -37,6 +42,8 @@ private:
     unsigned int _stop_fluent_tick;
     DistanceSensor *_front_sensor;
     DistanceSensor *_rear_sensor;
+
+    GoCallback _go_callbacks[2][2];
 
     int delay_checking_sensors( byte dir, int delay_ms ) {
         if (   dir == FORWARD  && !_front_sensor
@@ -67,12 +74,22 @@ public:
      {
         for ( byte i = 0; i < _axes * 2; i++ ) {
             Wheel &wheel = this->_wheels[ wheels[i][0] ][ wheels[i][1] ];
-            wheel.speed_pin = wheels[i][2];
-            wheel.dir_pin1  = wheels[i][3];
-            wheel.dir_pin2  = wheels[i][4];
+            pinMode( wheel.speed_pin = wheels[i][2], OUTPUT );
+            pinMode( wheel.dir_pin1  = wheels[i][3], OUTPUT );
+            pinMode( wheel.dir_pin2  = wheels[i][4], OUTPUT );
             wheel.speed     = 0;
             wheel.dir       = FORWARD;
         }
+
+        for ( byte dir = FORWARD; dir <= BACKWARD; dir++ ) {
+            for ( byte type = BEFORE; type <= AFTER; type++ ) {
+                _go_callbacks[ dir ][ type ] = 0;
+            }           
+        }
+    }
+
+    void set_go_callback( byte dir, byte type, GoCallback callback ) {
+        _go_callbacks[ dir ][ type ] = callback;
     }
 
     // Низкоуровневое управление
@@ -150,6 +167,13 @@ public:
     //           0.0 -- колеса неподвижны
     //            -1.0 -- колеса крутятся назад с указанной максимальной скоростью
     CarDirect &go( float speed, int delay_ms = 0, float left_coef = 1.0, float right_coef = 1.0 ) {
+        if ( _go_callbacks[FORWARD][BEFORE] && ( left_coef > 0.0 || right_coef > 0.0 ) ) {
+            _go_callbacks[FORWARD][BEFORE]( speed );
+        }
+        if ( _go_callbacks[BACKWARD][BEFORE] && ( left_coef < 0.0 || right_coef < 0.0 ) ) {
+            _go_callbacks[BACKWARD][BEFORE]( speed );
+        }
+
         this->rotate_side( LEFT , left_coef  >= 0.0 ? FORWARD : BACKWARD, int( abs( speed ) * left_coef  ) );
         this->rotate_side( RIGHT, right_coef >= 0.0 ? FORWARD : BACKWARD, int( abs( speed ) * right_coef ) );
 
@@ -161,6 +185,13 @@ public:
             else {
                 delay( delay_ms );
             }
+        }
+
+        if ( _go_callbacks[FORWARD][AFTER] && ( left_coef > 0.0 || right_coef > 0.0 ) ) {
+            _go_callbacks[FORWARD][AFTER]( speed );
+        }
+        if ( _go_callbacks[BACKWARD][AFTER] && ( left_coef < 0.0 || right_coef < 0.0 ) ) {
+            _go_callbacks[BACKWARD][AFTER]( speed );
         }
 
         return *this;
@@ -274,7 +305,7 @@ public:
         }
 
         // Будем крутиться в случайную сторону
-        byte dir = random( 0, 1 );
+        byte dir = random( 2 );
         byte try_num = 0;
         while ( _front_sensor->isCloser( DISTANCE_SENSOR_MIN_DISTANCE * 10 ) ) {
             if ( try_num++ > DISTANCE_SENSOR_PROBE_MAX ) {

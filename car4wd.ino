@@ -17,15 +17,30 @@ bool is_stopping_fluently = false;
 
 const byte AXIS = 0;
 
+// digital pins
+const byte RIGHT_DIR_PIN_1     = 2;
+const byte RIGHT_SPEED_PIN     = 3; // ШИМ
+const byte RIGHT_DIR_PIN_2     = 4;
+const byte LEFT_SPEED_PIN      = 5; // ШИМ
+const byte LEFT_DIR_PIN_1      = 6;
+const byte LEFT_DIR_PIN_2      = 7;
+const byte US_SENSOR_ECHO_PIN  = 8;
+const byte US_SENSOR_TRIG_PIN  = 9;
+const byte BEEPER_PIN          = 10; // ШИМ
+const byte FORWARD_LIGTHS_PIN  = 11;
+const byte BACKWARD_LIGTHS_PIN = 12;
+
+// analog pins
+const byte IR_RECV_PIN = 0;
+
 byte wheels[][5] = {
-    { RIGHT, AXIS, 3, 2, 4 },
-    { LEFT , AXIS, 5, 6, 7 },
+    { RIGHT, AXIS, RIGHT_SPEED_PIN, RIGHT_DIR_PIN_1, RIGHT_DIR_PIN_2 },
+    { LEFT , AXIS, LEFT_SPEED_PIN , LEFT_DIR_PIN_1 , LEFT_DIR_PIN_2  },
 };
 
 DistanceSRF04 front_sensor;
 CarDirect car( 1, wheels, MAX_SPEED, &front_sensor );
 
-const int IR_RECV_PIN = 0;
 IRrecv irrecv( IR_RECV_PIN );
 decode_results results;
 
@@ -53,7 +68,16 @@ void setup() {
     Serial.setTimeout( 50 );
     irrecv.enableIRIn(); // Start the IR receiver
     
-    front_sensor.begin( 8, 9 ); // echo & trigger pins
+    front_sensor.begin( US_SENSOR_ECHO_PIN, US_SENSOR_TRIG_PIN );
+
+    pinMode( BEEPER_PIN         , OUTPUT );
+    pinMode( FORWARD_LIGTHS_PIN , OUTPUT );
+    pinMode( BACKWARD_LIGTHS_PIN, OUTPUT );
+
+    car.set_go_callback( FORWARD , BEFORE, before_forward  );
+    car.set_go_callback( BACKWARD, BEFORE, before_backward );
+    car.set_go_callback( FORWARD , AFTER , after_forward );
+    car.set_go_callback( BACKWARD, AFTER , after_backward );
 
     test_predefined_drive();
     // autopilot();
@@ -227,4 +251,29 @@ bool process_serial_cmd( const String &cmd, int speed_percent ) {
     // TODO выводим текущую скорость на экран
 
     return true;   
+}
+
+// movement callbacks
+void before_forward( float speed ) {
+    // tone( BEEPER_PIN, speed / 10  );
+
+    digitalWrite( FORWARD_LIGTHS_PIN, HIGH );
+}
+
+void before_backward( float speed ) {
+    // tone( BEEPER_PIN, speed / 5 );
+
+    digitalWrite( BACKWARD_LIGTHS_PIN, HIGH );
+}
+
+void after_forward( float speed ) {
+    // noTone( BEEPER_PIN );
+
+    digitalWrite( FORWARD_LIGTHS_PIN, LOW );
+}
+
+void after_backward( float speed ) {
+    // noTone( BEEPER_PIN );
+
+    digitalWrite( BACKWARD_LIGTHS_PIN, LOW );
 }
