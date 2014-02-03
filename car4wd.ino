@@ -1,41 +1,40 @@
 #include "CarDirect.h"
 #include <IRremote.h>
 #include <DistanceSRF04.h>
+#include <AFMotor.h>
 
 const float MAX_SPEED = 3900; // максимальная скорость машинки в сантиметрах в минуту
 
-const float VERY_SLOW = MAX_SPEED * 0.2; 
-const float SLOW      = MAX_SPEED * 0.4; 
-const float AVERAGE   = MAX_SPEED * 0.6; 
+const float VERY_SLOW = MAX_SPEED * 0.4; 
+const float SLOW      = MAX_SPEED * 0.6; 
+const float AVERAGE   = MAX_SPEED * 0.8; 
 const float FAST      = MAX_SPEED * 0.8; 
-const float VERY_FAST = MAX_SPEED;
-float current_speed = AVERAGE;
+const float VERY_FAST = MAX_SPEED * 1;
+float current_speed = MAX_SPEED;
 bool is_stopping_fluently = false;
+bool autopilot_mode = false;
 
 // переводит расстояние в см и скорость в скорость и время в мс
 #define l2t( speed, length ) ( speed ), ( ( length ) / ( speed ) * 60000 )
 
-const byte AXIS = 0;
+const byte FRONT_AXIS = 0;
+const byte REAR_AXIS  = 1;
 
 // digital pins
-const byte RIGHT_DIR_PIN_1     = 2;
-const byte RIGHT_SPEED_PIN     = 3; // ШИМ
-const byte RIGHT_DIR_PIN_2     = 4;
-const byte LEFT_SPEED_PIN      = 5; // ШИМ
-const byte LEFT_DIR_PIN_1      = 6;
-const byte LEFT_DIR_PIN_2      = 7;
-const byte US_SENSOR_ECHO_PIN  = 8;
-const byte US_SENSOR_TRIG_PIN  = 9;
+
+// analog pins
+const byte IR_RECV_PIN         = A5;
+const byte US_SENSOR_ECHO_PIN  = A0;
+const byte US_SENSOR_TRIG_PIN  = A1;
 const byte BEEPER_PIN          = 10; // ШИМ
 const byte FORWARD_LIGHTS_PIN  = 11;
 const byte BACKWARD_LIGHTS_PIN = 12;
 
-// analog pins
-const byte IR_RECV_PIN = 0;
-
-byte wheels[][5] = {
-    { RIGHT, AXIS, RIGHT_SPEED_PIN, RIGHT_DIR_PIN_1, RIGHT_DIR_PIN_2 },
-    { LEFT , AXIS, LEFT_SPEED_PIN , LEFT_DIR_PIN_1 , LEFT_DIR_PIN_2  },
+byte wheels[][3] = {
+    { RIGHT, FRONT_AXIS, 1 },
+    { LEFT , FRONT_AXIS, 2 },
+/*  { RIGHT, REAR_AXIS , 3 },
+    { LEFT , REAR_AXIS , 4 }*/
 };
 
 DistanceSRF04 front_sensor;
@@ -44,22 +43,25 @@ CarDirect car( 1, wheels, MAX_SPEED, &front_sensor );
 IRrecv irrecv( IR_RECV_PIN );
 decode_results results;
 
-// Коды кнопок IR пульта
-const unsigned long IR_FORWARD              = B00000;
-const unsigned long IR_BACKWARD             = B00001;
-const unsigned long IR_ROTATE_LEFT          = B00010;
-const unsigned long IR_ROTATE_RIGHT         = B00011;
-const unsigned long IR_DRIFT_FORWARD_LEFT   = B00100;
-const unsigned long IR_DRIFT_FORWARD_RIGHT  = B00101;
-const unsigned long IR_DRIFT_BACKWARD_LEFT  = B00110;
-const unsigned long IR_DRIFT_BACKWARD_RIGHT = B00111;
-const unsigned long IR_STOP                 = B01000;
-const unsigned long IR_SPEED_UP             = B01001;
-const unsigned long IR_SLOW_DOWN            = B01010;
-const unsigned int IR_TIME = 300;
+unsigned long prev_ir_cmd = 0;
 
-const unsigned int STOP_FLUENT_TIME = 300;
-const unsigned int STOP_FLUENT_TICK = 50;
+// Коды кнопок IR пульта
+const unsigned long IR_FORWARD              = 0xCD171AFF;
+const unsigned long IR_BACKWARD             = 0x85883E95;
+const unsigned long IR_ROTATE_LEFT          = 0xE8DFBFBB;
+const unsigned long IR_ROTATE_RIGHT         = 0x2401508B;
+const unsigned long IR_DRIFT_FORWARD_LEFT   = 0x5621E826;
+const unsigned long IR_DRIFT_FORWARD_RIGHT  = 0xDF7539BA;
+const unsigned long IR_DRIFT_BACKWARD_LEFT  = 0x888B042E;
+const unsigned long IR_DRIFT_BACKWARD_RIGHT = 0x100A4C9E;
+const unsigned long IR_STOP                 = 0xFB442204;
+const unsigned long IR_SPEED_UP             = 0xF91B3490;
+const unsigned long IR_SLOW_DOWN            = 0xCF39C4E5;
+const unsigned long IR_AUTOPILOT            = 0x4B64311A;
+const unsigned int IR_TIME = 50;
+
+const unsigned int STOP_FLUENT_TIME = 1000;
+const unsigned int STOP_FLUENT_TICK = 20;
 
 const unsigned int SERIAL_TIME = 300;
 
@@ -69,17 +71,21 @@ void setup() {
     irrecv.enableIRIn(); // Start the IR receiver
     
     front_sensor.begin( US_SENSOR_ECHO_PIN, US_SENSOR_TRIG_PIN );
+    int null_distances[] = { 8 };
+    front_sensor.setNullDistances( null_distances, 1 );
 
-    pinMode( BEEPER_PIN         , OUTPUT );
+/*  pinMode( BEEPER_PIN         , OUTPUT );
     pinMode( FORWARD_LIGHTS_PIN , OUTPUT );
     pinMode( BACKWARD_LIGHTS_PIN, OUTPUT );
+*/
 
-    car.set_go_callback( FORWARD , BEFORE, before_forward  );
+/*  car.set_go_callback( FORWARD , BEFORE, before_forward  );
     car.set_go_callback( BACKWARD, BEFORE, before_backward );
     car.set_go_callback( FORWARD , AFTER , after_forward );
     car.set_go_callback( BACKWARD, AFTER , after_backward );
+*/
 
-    test_predefined_drive();
+    // test_predefined_drive();
     // autopilot();
 }
 
@@ -88,11 +94,10 @@ void loop() {
 
     // процессим IR сигналы
     if ( irrecv.decode( &results ) ) {
-        Serial.println( results.value, HEX );
         cmd_processed = process_ir_press_button( results.value );
         irrecv.resume(); // Receive the next value
     }
-
+    
     if ( !cmd_processed ) {
         // процессим команды с serial port
         if ( Serial.available() > 0 && Serial.find( "DO " ) ) {
@@ -110,6 +115,12 @@ void loop() {
         is_stopping_fluently = false;
         return;
     }
+    
+    if ( autopilot_mode ) {
+        car.forward( FAST, 1000 );
+        car.search_path();
+        return;
+    }
 
     // нет команды на выполнение
     if ( is_stopping_fluently ) {
@@ -123,39 +134,33 @@ void loop() {
 
 void test_predefined_drive() {
     // вперед-назад
-    car .forward ( SLOW     , 200 )
-        .forward ( AVERAGE  , 300 )
-        .forward ( VERY_FAST, 200 )
+    car .forward ( AVERAGE, 3000 )
+        .forward ( FAST     , 1000 )
+        .forward ( VERY_FAST  , 1000 )
         .stop    ( 200 )
-        .backward( VERY_FAST, 200 )
-        .backward( AVERAGE  , 200 )
-        .backward( SLOW     , 200 )
+        .backward( VERY_FAST  , 1000 )
+        .backward( FAST     , 1000 )
+        .backward( AVERAGE, 3000 )
         .stop    ( 200 );
+        
+   car.rotate_right( FAST, 10000 ).rotate_left( FAST, 10000 ).stop();
       
       // вперёд с поворотом направо и разворотом с помощью дрифта
-    car .forward     ( VERY_FAST, 200  )
-        .drift_forward_right( VERY_FAST, 300 )
-        .backward    ( VERY_FAST, 200 )
-        .drift_backward_left( VERY_FAST, 300 )
-        .forward     ( AVERAGE,   250 ) 
-        .rotate_right( SLOW, 1000 ) // пробуем развернуться
-        .stop    ();
-      
-    car .forward( l2t( VERY_FAST, 200 ) )
-        .backward( l2t( VERY_FAST, 200 ) )
-        .stop_fluently_init( 300, 50 )
-        .stop_fluently_tick( 50 )
-        .stop_fluently_tick( 50 )
-        .stop_fluently_tick( 50 )
-        .stop_fluently_tick( 50 )
-        .stop_fluently_tick( 50 )
-        .stop_fluently_tick( 50 );
+      car .forward     ( FAST, 5000  )
+        .drift_forward_left( FAST, 6000 )
+        .backward    ( AVERAGE, 4000 )
+        .drift_backward_right( FAST, 6000 )
+        .forward     ( AVERAGE,   5000 ) 
+        .rotate_right( FAST, 5000 ) // пробуем развернуться
+        .stop    ();      
 }
 
 void autopilot() {
     while ( 1 ) {
         // едем до препятствия
-        car.forward( l2t( AVERAGE, 1000 ) );
+        car.forward( VERY_FAST, 5000 );
+        
+        Serial.println( "stopped" );
 
         // поворачиваемся в какую нибудь сторону и ищем проезд
         if ( !car.search_path() ) {
@@ -165,6 +170,21 @@ void autopilot() {
 }
 
 bool process_ir_press_button( unsigned long button ) {
+    if ( button == REPEAT ) {
+        if ( prev_ir_cmd  ) {
+            button = prev_ir_cmd;
+        }
+        else {
+            return false;
+        }
+    }
+    else {
+        prev_ir_cmd = button;
+    }
+    
+    // Serial.println( "ir cmd" );
+    // Serial.println( button, HEX );
+
     switch ( button ) {
         case IR_FORWARD:
             car.forward( current_speed, IR_TIME );
@@ -205,6 +225,9 @@ bool process_ir_press_button( unsigned long button ) {
                 current_speed = VERY_SLOW;
             }
             break;
+         case IR_AUTOPILOT:
+            autopilot_mode = !autopilot_mode;
+            return false;
         default:
             return false;
     }
@@ -243,6 +266,10 @@ bool process_serial_cmd( const String &cmd, int speed_percent ) {
     }
     else if ( cmd == "stop" ) {
         car.stop();
+    }
+    else if ( cmd == "autopilot" ) {
+        autopilot_mode = !autopilot_mode;
+        return false;
     }
     else {
         return false;
