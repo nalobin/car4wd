@@ -83,8 +83,8 @@ void setup() {
     car.set_front_distance_sensors( front_distance_sensors, 1 );
 
     ObstacleSensor obstacle_sensor = ObstacleSensor( BACK_IR_SENSOR_PIN );
-    ObstacleSensor *front_obstacle_sensors[] = { &obstacle_sensor };
-    car.set_front_obstacle_sensors( front_obstacle_sensors, 1 );
+    ObstacleSensor *rear_obstacle_sensors[] = { &obstacle_sensor };
+    car.set_rear_obstacle_sensors( rear_obstacle_sensors, 1 );
 
     pinMode( BEEPER_PIN         , OUTPUT );
     pinMode( BACK_IR_SENSOR_PIN , INPUT  );
@@ -130,7 +130,7 @@ void loop() {
     
     if ( autopilot_mode ) {
         car.forward( FAST, 1000 );
-        car.search_path();
+        car.search_path( _FORWARD );
         return;
     }
 
@@ -168,15 +168,31 @@ void test_predefined_drive() {
 }
 
 void autopilot() {
+    byte dir = _FORWARD;
     while ( 1 ) {
-        // едем до препятствия
-        car.forward( VERY_SLOW, 5000 );
-        
-        Serial.println( "stopped" );
+        bool should_change_dir = random( 5 ) == 0;
+        int delay_ms = should_change_dir ? 2000 : 5000;
 
-        // поворачиваемся в какую нибудь сторону и ищем проезд
-        if ( !car.search_path() ) {
-            break;
+        // run till obstacle found
+        if ( dir == _FORWARD ) {
+            car.forward( VERY_SLOW, delay_ms );
+        }
+        else {
+            car.backward( VERY_SLOW, delay_ms ); // should have rear sensors
+        }
+
+        if ( should_change_dir ) {
+            dir = dir == _FORWARD ? _BACKWARD: _FORWARD;
+            continue;
+        }
+        
+        if ( !car.search_path( dir ) ) {
+            // search opposite way
+            dir = dir == _FORWARD ? _BACKWARD: _FORWARD;
+
+            if ( !car.search_path( dir ) ) {
+                break;
+            }
         }
     }
 }

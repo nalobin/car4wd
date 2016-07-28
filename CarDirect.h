@@ -52,11 +52,12 @@ private:
     GoCallback _go_callbacks[2][2];
 
     void delay_checking_sensors( byte dir, int delay_ms ) {
-        if (   dir == _FORWARD  && ( !_front_distance_sensors_cnt || !_front_obstacle_sensors_cnt )
-            || dir == _BACKWARD && ( !_rear_distance_sensors_cnt || !_rear_obstacle_sensors_cnt ) ) {
+        // TODO debug
+        /*  if (   dir == _FORWARD  && !_front_distance_sensors_cnt && !_front_obstacle_sensors_cnt
+            || dir == _BACKWARD && !_rear_distance_sensors_cnt  && !_rear_obstacle_sensors_cnt  ) {
             delay( delay_ms );
             return;
-        }
+        }*/
 
         int checks = delay_ms / DISTANCE_SENSOR_CHECK_INTERVAL;
 
@@ -224,7 +225,7 @@ public:
 
         if ( delay_ms ) {
             if ( left_coef * right_coef > 0 ) {
-                // если едем вперед или назад, то используем датчики расстояния
+                // если едем вперед или назад, то используем датчики столкновений
                 this->delay_checking_sensors( left_coef  >= 0.0 ? _FORWARD : _BACKWARD, delay_ms );
             }
             else {
@@ -352,27 +353,34 @@ public:
         return *this;
     }
 
-    // Rotating car in order to go forward. Use distance sensors only.
-    bool search_path() {
-        if ( !_front_distance_sensors_cnt ) {
-            // no forward sensors found
+    // Rotating car in order to go to given direction.
+    bool search_path( byte dir ) {
+        // TODO debug
+        /*  if ( dir == _FORWARD  && !_front_distance_sensors_cnt && !_front_obstacle_sensors_cnt
+            || dir == _BACKWARD && !_rear_distance_sensors_cnt  && !_rear_obstacle_sensors_cnt ) {
             this->stop();
             return false;
-        }
+        }*/
+
+        DistanceSensor **distance_sensors = dir == _FORWARD ? _front_distance_sensors : _rear_distance_sensors;
+        byte distance_sensors_cnt = dir == _FORWARD ? _front_distance_sensors_cnt : _rear_distance_sensors_cnt;
+
+        ObstacleSensor **obstacle_sensors = dir == _FORWARD ? _front_obstacle_sensors : _rear_obstacle_sensors;
+        byte obstacle_sensors_cnt = dir == _FORWARD ? _front_obstacle_sensors_cnt : _rear_obstacle_sensors_cnt;
 
         // Randomly select rotation direction
-        byte dir = random( 2 );
+        byte rotate_dir = random( 2 );
         for ( byte try_num = 0; try_num < DISTANCE_SENSOR_PROBE_MAX; try_num++ ) {
             Serial.println( "searching..." );
 
             bool has_obstacle = false;
 
             // First check distance sensors (for longer forward runs)
-            for ( byte sensor_num = 0; sensor_num < _front_distance_sensors_cnt; sensor_num++ ) { 
-                DistanceSensor *sensor = _front_distance_sensors[ sensor_num ];
+            for ( byte sensor_num = 0; sensor_num < distance_sensors_cnt; sensor_num++ ) { 
+                DistanceSensor *sensor = distance_sensors[ sensor_num ];
                 int cm = sensor->getDistanceCentimeter();
-                // Serial.println( "Distance sensor check" );
-                // Serial.println( cm );
+                Serial.println( "Distance sensor check" );
+                Serial.println( cm );
                 if ( cm < DISTANCE_SENSOR_MIN_DISTANCE * 2 ) {
                     has_obstacle = true;
                 }
@@ -380,8 +388,8 @@ public:
 
             if ( !has_obstacle ) {
                 // Should ensure no obstacles on obstacle sensors
-                for ( byte sensor_num = 0; sensor_num < _front_obstacle_sensors_cnt; sensor_num++ ) { 
-                    ObstacleSensor *sensor = _front_obstacle_sensors[ sensor_num ];
+                for ( byte sensor_num = 0; sensor_num < obstacle_sensors_cnt; sensor_num++ ) { 
+                    ObstacleSensor *sensor = obstacle_sensors[ sensor_num ];
                     if ( sensor->has_obstacle() ) {
                         has_obstacle = true;
                     }
@@ -393,7 +401,7 @@ public:
             }
 
             // See an obstacle
-            if ( dir ) {
+            if ( rotate_dir ) {
                 this->rotate_left( _max_speed, DISTANCE_SENSOR_PROBE_INTERVAL );
             }
             else {
