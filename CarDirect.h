@@ -2,6 +2,7 @@
 #define CARDIRECT_H_
 
 #include <Arduino.h>
+#include "ObstacleSensor.h"
 #include <DistanceSensor.h>
 #include <AFMotor.h>
 
@@ -17,7 +18,7 @@ const byte _FORWARD = 0;
 const byte _BACKWARD = 1;
 
 const int DISTANCE_SENSOR_CHECK_INTERVAL  = 10; // ms
-const int DISTANCE_SENSOR_MIN_DISTANCE    = 20; // cm
+const int DISTANCE_SENSOR_MIN_DISTANCE    = 40; // cm
 const int DISTANCE_SENSOR_PROBE_MAX       = 40; // попытки поиска пути
 const int DISTANCE_SENSOR_PROBE_INTERVAL  = 250; // интервал между попытками поиска пути
 
@@ -39,39 +40,70 @@ private:
         [MAX_AXES];  // индекс оси колеса; 0 - передняя ось
     float _max_speed;
     unsigned int _stop_fluent_tick;
-    DistanceSensor *_front_sensor;
-    DistanceSensor *_rear_sensor;
+    DistanceSensor **_front_distance_sensors;
+    byte _front_distance_sensors_cnt;
+    DistanceSensor **_rear_distance_sensors;
+    byte _rear_distance_sensors_cnt;
+    ObstacleSensor **_front_obstacle_sensors;
+    byte _front_obstacle_sensors_cnt;
+    ObstacleSensor **_rear_obstacle_sensors;
+    byte _rear_obstacle_sensors_cnt;
 
     GoCallback _go_callbacks[2][2];
 
-    int delay_checking_sensors( byte dir, int delay_ms ) {
-        if (   dir == _FORWARD  && !_front_sensor
-            || dir == _BACKWARD && !_rear_sensor ) {
+    void delay_checking_sensors( byte dir, int delay_ms ) {
+        if (   dir == _FORWARD  && ( !_front_distance_sensors_cnt || !_front_obstacle_sensors_cnt )
+            || dir == _BACKWARD && ( !_rear_distance_sensors_cnt || !_rear_obstacle_sensors_cnt ) ) {
             delay( delay_ms );
-            return -1;
+            return;
         }
 
-        DistanceSensor *sensor = dir == _FORWARD ? _front_sensor : _rear_sensor;
         int checks = delay_ms / DISTANCE_SENSOR_CHECK_INTERVAL;
 
+        DistanceSensor **distance_sensors = dir == _FORWARD ? _front_distance_sensors : _rear_distance_sensors;
+        byte distance_sensors_cnt = dir == _FORWARD ? _front_distance_sensors_cnt : _rear_distance_sensors_cnt;
+
+        ObstacleSensor **obstacle_sensors = dir == _FORWARD ? _front_obstacle_sensors : _rear_obstacle_sensors;
+        byte obstacle_sensors_cnt = dir == _FORWARD ? _front_obstacle_sensors_cnt : _rear_obstacle_sensors_cnt;
+
         for ( int check = 0; check < checks; check++ ) {
-            int cm = sensor->getDistanceCentimeter();
-            // Serial.println( "check" );
-            // Serial.println( cm );
-            if ( cm > 0 && cm != 8 && cm < DISTANCE_SENSOR_MIN_DISTANCE ) {
-                this->stop();
-                break;
+            // first check obstacle sensors
+            for ( byte sensor_num = 0; sensor_num < obstacle_sensors_cnt; sensor_num++ ) { 
+                ObstacleSensor *sensor = obstacle_sensors[ sensor_num ];
+                bool has = sensor->has_obstacle();
+                Serial.println( "Obstacle sensor check" );
+                Serial.println( has );
+                if ( has ) {
+                    this->stop();
+                    return;
+                }
             }
-            
+
+            // then check distance sensors
+            for ( byte sensor_num = 0; sensor_num < distance_sensors_cnt; sensor_num++ ) { 
+                DistanceSensor *sensor = distance_sensors[ sensor_num ];
+                int cm = sensor->getDistanceCentimeter();
+                Serial.println( "Distance sensor check" );
+                Serial.println( cm );
+                if ( cm > 0 && cm < DISTANCE_SENSOR_MIN_DISTANCE ) {
+                    this->stop();
+                    return;
+                }
+            }
+
+            // no obstacles found. do nothing (actually run)
             delay( DISTANCE_SENSOR_CHECK_INTERVAL );
         }
 
-        return sensor->getDistanceCentimeter();
+
     }
 public:
-    CarDirect( byte axes, byte wheels[][3], float max_speed = 4000,
-        DistanceSensor *front_sensor = 0 , DistanceSensor *rear_sensor = 0 )
-        : _axes( axes ), _max_speed( max_speed ), _front_sensor( front_sensor ), _rear_sensor( rear_sensor )
+    CarDirect( byte axes, byte wheels[][3], float max_speed = 4000  )
+        : _axes( axes ), _max_speed( max_speed ),
+        _front_distance_sensors_cnt( 0 ),
+        _rear_distance_sensors_cnt( 0 ),
+        _front_obstacle_sensors_cnt( 0 ),
+        _rear_obstacle_sensors_cnt( 0 )
      {
         for ( byte i = 0; i < _axes * 2; i++ ) {
             Wheel &wheel = this->_wheels[ wheels[i][0] ][ wheels[i][1] ];
@@ -85,6 +117,23 @@ public:
                 _go_callbacks[ dir ][ type ] = 0;
             }           
         }
+    }
+
+    void set_front_distance_sensors( DistanceSensor **sensors, byte cnt ) {
+        _front_distance_sensors = sensors;
+        _front_distance_sensors_cnt = cnt;
+    }
+    void set_rear_distance_sensors( DistanceSensor **sensors, byte cnt ) {
+        _rear_distance_sensors = sensors;
+        _rear_distance_sensors_cnt = cnt;
+    }
+    void set_front_obstacle_sensors( ObstacleSensor **sensors, byte cnt ) {
+        _front_obstacle_sensors = sensors;
+        _front_obstacle_sensors_cnt = cnt;
+    }
+    void set_rear_obstacle_sensors( ObstacleSensor **sensors, byte cnt ) {
+        _rear_obstacle_sensors = sensors;
+        _rear_obstacle_sensors_cnt = cnt;
     }
 
     void set_go_callback( byte dir, byte type, GoCallback callback ) {
@@ -303,27 +352,47 @@ public:
         return *this;
     }
 
-    // поворачиваем машину передом в пустое пространсвто
+    // Rotating car in order to go forward. Use distance sensors only.
     bool search_path() {
-        if ( !_front_sensor ) {
+        if ( !_front_distance_sensors_cnt ) {
+            // no forward sensors found
             this->stop();
             return false;
         }
 
-        // Будем крутиться в случайную сторону
+        // Randomly select rotation direction
         byte dir = random( 2 );
-        byte try_num = 0;
-        while ( _front_sensor->getDistanceCentimeter() > 0
-          && _front_sensor->getDistanceCentimeter() != 8
-          && _front_sensor->getDistanceCentimeter() < DISTANCE_SENSOR_MIN_DISTANCE * 2 ) {
+        for ( byte try_num = 0; try_num < DISTANCE_SENSOR_PROBE_MAX; try_num++ ) {
             Serial.println( "searching..." );
-            if ( try_num++ > DISTANCE_SENSOR_PROBE_MAX ) {
-                // Замуровали демоны!!!
-                Serial.println( "shit, they blocked me!" );
-                this->stop();
-                return false;                
+
+            bool has_obstacle = false;
+
+            // First check distance sensors (for longer forward runs)
+            for ( byte sensor_num = 0; sensor_num < _front_distance_sensors_cnt; sensor_num++ ) { 
+                DistanceSensor *sensor = _front_distance_sensors[ sensor_num ];
+                int cm = sensor->getDistanceCentimeter();
+                // Serial.println( "Distance sensor check" );
+                // Serial.println( cm );
+                if ( cm < DISTANCE_SENSOR_MIN_DISTANCE * 2 ) {
+                    has_obstacle = true;
+                }
             }
 
+            if ( !has_obstacle ) {
+                // Should ensure no obstacles on obstacle sensors
+                for ( byte sensor_num = 0; sensor_num < _front_obstacle_sensors_cnt; sensor_num++ ) { 
+                    ObstacleSensor *sensor = _front_obstacle_sensors[ sensor_num ];
+                    if ( sensor->has_obstacle() ) {
+                        has_obstacle = true;
+                    }
+                }
+            }
+
+            if ( !has_obstacle ) {
+                return true;
+            }
+
+            // See an obstacle
             if ( dir ) {
                 this->rotate_left( _max_speed, DISTANCE_SENSOR_PROBE_INTERVAL );
             }
@@ -332,7 +401,9 @@ public:
             }
         }
 
-        return true;
+        Serial.println( "shit, they blocked me!" );
+        this->stop();
+        return false;
     }
 
 }; // class CarDirect

@@ -1,4 +1,5 @@
 #include "CarDirect.h"
+#include "ObstacleSensor.h"
 #include <IRremote.h>
 #include <DistanceSRF04.h>
 #include <AFMotor.h>
@@ -20,25 +21,25 @@ bool autopilot_mode = false;
 const byte FRONT_AXIS = 0;
 const byte REAR_AXIS  = 1;
 
-// digital pins
-
-// analog pins
+// pins
+const byte FRONT_US_SENSOR_ECHO_PIN  = A0; // 14 
+const byte FRONT_US_SENSOR_TRIG_PIN  = A1;
+const byte BACK_IR_SENSOR_PIN  = A2;
+const byte BEEPER_PIN          = A6; // ШИМ
+const byte FORWARD_LIGHTS_PIN  = A3;
+const byte BACKWARD_LIGHTS_PIN = A4;
 const byte IR_RECV_PIN         = A5;
-const byte US_SENSOR_ECHO_PIN  = A0;
-const byte US_SENSOR_TRIG_PIN  = A1;
-const byte BEEPER_PIN          = 10; // ШИМ
-const byte FORWARD_LIGHTS_PIN  = 11;
-const byte BACKWARD_LIGHTS_PIN = 12;
+
+// free digital pins of Motor Shield 2, 13 (+9,10 if no servos)
 
 byte wheels[][3] = {
-    { RIGHT, FRONT_AXIS, 1 },
-    { LEFT , FRONT_AXIS, 2 },
-/*  { RIGHT, REAR_AXIS , 3 },
-    { LEFT , REAR_AXIS , 4 }*/
+    { RIGHT, FRONT_AXIS, 2 },
+    { LEFT , FRONT_AXIS, 1 },
+    { RIGHT, REAR_AXIS , 4 },
+    { LEFT , REAR_AXIS , 3 }
 };
 
-DistanceSRF04 front_sensor;
-CarDirect car( 1, wheels, MAX_SPEED, &front_sensor );
+CarDirect car( 2, wheels, MAX_SPEED );
 
 IRrecv irrecv( IR_RECV_PIN );
 decode_results results;
@@ -58,6 +59,7 @@ const unsigned long IR_STOP                 = 0xFB442204;
 const unsigned long IR_SPEED_UP             = 0xF91B3490;
 const unsigned long IR_SLOW_DOWN            = 0xCF39C4E5;
 const unsigned long IR_AUTOPILOT            = 0x4B64311A;
+
 const unsigned int IR_TIME = 50;
 
 const unsigned int STOP_FLUENT_TIME = 1000;
@@ -68,25 +70,35 @@ const unsigned int SERIAL_TIME = 300;
 void setup() {
     Serial.begin( 9600 );
     Serial.setTimeout( 50 );
-    irrecv.enableIRIn(); // Start the IR receiver
-    
-    front_sensor.begin( US_SENSOR_ECHO_PIN, US_SENSOR_TRIG_PIN );
-    int null_distances[] = { 8 };
-    front_sensor.setNullDistances( null_distances, 1 );
+    // irrecv.enableIRIn(); // Конфликтует с M1, M2 на Motor Shield
 
-/*  pinMode( BEEPER_PIN         , OUTPUT );
+    // включить только если реально подключен. иначе будет крутить вечно
+    DistanceSRF04 front_distance_sensor;
+    DistanceSensor *front_distance_sensors[] = { &front_distance_sensor };
+    
+    front_distance_sensor.begin( FRONT_US_SENSOR_ECHO_PIN, FRONT_US_SENSOR_TRIG_PIN );
+    int null_distances[] = { 8 };
+    front_distance_sensor.setNullDistances( null_distances, 1 );
+
+    car.set_front_distance_sensors( front_distance_sensors, 1 );
+
+    ObstacleSensor obstacle_sensor = ObstacleSensor( BACK_IR_SENSOR_PIN );
+    ObstacleSensor *front_obstacle_sensors[] = { &obstacle_sensor };
+    car.set_front_obstacle_sensors( front_obstacle_sensors, 1 );
+
+    pinMode( BEEPER_PIN         , OUTPUT );
+    pinMode( BACK_IR_SENSOR_PIN , INPUT  );
     pinMode( FORWARD_LIGHTS_PIN , OUTPUT );
     pinMode( BACKWARD_LIGHTS_PIN, OUTPUT );
-*/
+    pinMode( BACKWARD_LIGHTS_PIN, OUTPUT );
 
-/*  car.set_go_callback( FORWARD , BEFORE, before_forward  );
-    car.set_go_callback( BACKWARD, BEFORE, before_backward );
-    car.set_go_callback( FORWARD , AFTER , after_forward );
-    car.set_go_callback( BACKWARD, AFTER , after_backward );
-*/
+    car.set_go_callback( _FORWARD , BEFORE, before_forward  );
+    car.set_go_callback( _BACKWARD, BEFORE, before_backward );
+    car.set_go_callback( _FORWARD , AFTER , after_forward );
+    car.set_go_callback( _BACKWARD, AFTER , after_backward );
 
     // test_predefined_drive();
-    // autopilot();
+    autopilot();
 }
 
 void loop() {
@@ -134,31 +146,31 @@ void loop() {
 
 void test_predefined_drive() {
     // вперед-назад
-    car .forward ( AVERAGE, 3000 )
-        .forward ( FAST     , 1000 )
-        .forward ( VERY_FAST  , 1000 )
-        .stop    ( 200 )
-        .backward( VERY_FAST  , 1000 )
-        .backward( FAST     , 1000 )
-        .backward( AVERAGE, 3000 )
-        .stop    ( 200 );
-        
-   car.rotate_right( FAST, 10000 ).rotate_left( FAST, 10000 ).stop();
-      
-      // вперёд с поворотом направо и разворотом с помощью дрифта
-      car .forward     ( FAST, 5000  )
-        .drift_forward_left( FAST, 6000 )
-        .backward    ( AVERAGE, 4000 )
-        .drift_backward_right( FAST, 6000 )
-        .forward     ( AVERAGE,   5000 ) 
-        .rotate_right( FAST, 5000 ) // пробуем развернуться
-        .stop    ();      
+    car.forward ( AVERAGE, 3000 )
+       .forward ( FAST     , 1000 )
+       .forward ( VERY_FAST  , 1000 )
+       .stop    ( 200 )
+       .backward( VERY_FAST  , 1000 )
+       .backward( FAST     , 1000 )
+       .backward( AVERAGE, 3000 )
+       .stop    ( 200 );
+       
+  car.rotate_right( FAST, 10000 ).rotate_left( FAST, 10000 ).stop();
+     
+     // вперёд с поворотом направо и разворотом с помощью дрифта
+     // car.forward     ( FAST, 5000  )
+     //   .drift_forward_left( FAST, 6000 )
+     //   .backward    ( AVERAGE, 4000 )
+     //   .drift_backward_right( FAST, 6000 )
+     //   .forward     ( AVERAGE,   5000 ) 
+     //   .rotate_right( FAST, 5000 ) // пробуем развернуться
+     //   .stop    ();      
 }
 
 void autopilot() {
     while ( 1 ) {
         // едем до препятствия
-        car.forward( VERY_FAST, 5000 );
+        car.forward( VERY_SLOW, 5000 );
         
         Serial.println( "stopped" );
 
@@ -182,8 +194,8 @@ bool process_ir_press_button( unsigned long button ) {
         prev_ir_cmd = button;
     }
     
-    // Serial.println( "ir cmd" );
-    // Serial.println( button, HEX );
+    Serial.println( "ir cmd" );
+    Serial.println( button, HEX );
 
     switch ( button ) {
         case IR_FORWARD:
