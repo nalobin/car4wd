@@ -1,6 +1,6 @@
 #include "CarDirect.h"
 #include "ObstacleSensor.h"
-#include <IRremote.h>
+// #include <IRremote.h>
 #include <DistanceSRF04.h>
 #include <AFMotor.h>
 
@@ -25,7 +25,7 @@ const byte REAR_AXIS  = 1;
 const byte FRONT_US_SENSOR_ECHO_PIN  = A0; // 14 
 const byte FRONT_US_SENSOR_TRIG_PIN  = A1;
 const byte BACK_IR_SENSOR_PIN  = A2;
-const byte BEEPER_PIN          = A6; // ШИМ
+const byte BEEPER_PIN          = A7; // ШИМ
 const byte FORWARD_LIGHTS_PIN  = A3;
 const byte BACKWARD_LIGHTS_PIN = A4;
 const byte IR_RECV_PIN         = A5;
@@ -41,8 +41,8 @@ byte wheels[][3] = {
 
 CarDirect car( 2, wheels, MAX_SPEED );
 
-IRrecv irrecv( IR_RECV_PIN );
-decode_results results;
+/*IRrecv irrecv( IR_RECV_PIN );
+decode_results results;*/
 
 unsigned long prev_ir_cmd = 0;
 
@@ -105,11 +105,11 @@ void loop() {
     bool cmd_processed = false;
 
     // процессим IR сигналы
-    if ( irrecv.decode( &results ) ) {
+/*    if ( irrecv.decode( &results ) ) {
         cmd_processed = process_ir_press_button( results.value );
         irrecv.resume(); // Receive the next value
     }
-    
+*/    
     if ( !cmd_processed ) {
         // процессим команды с serial port
         if ( Serial.available() > 0 && Serial.find( "DO " ) ) {
@@ -175,14 +175,20 @@ void autopilot() {
 
         // run till obstacle found
         if ( dir == _FORWARD ) {
-            car.forward( VERY_SLOW, delay_ms );
+            car.forward( SLOW, delay_ms );
         }
         else {
-            car.backward( VERY_SLOW, delay_ms ); // should have rear sensors
+            car.backward( SLOW, delay_ms ); // should have rear sensors
         }
 
         if ( should_change_dir ) {
             dir = dir == _FORWARD ? _BACKWARD: _FORWARD;
+            if ( random( 2 ) ) {
+                car.rotate_left( VERY_FAST, 500 );
+            }
+            else {
+                car.rotate_right( VERY_FAST, 500 );   
+            }
             continue;
         }
         
@@ -197,7 +203,7 @@ void autopilot() {
     }
 }
 
-bool process_ir_press_button( unsigned long button ) {
+/*bool process_ir_press_button( unsigned long button ) {
     if ( button == REPEAT ) {
         if ( prev_ir_cmd  ) {
             button = prev_ir_cmd;
@@ -263,7 +269,7 @@ bool process_ir_press_button( unsigned long button ) {
     // TODO выводим текущую скорость на экран
 
     return true;
-}
+}*/
 
 bool process_serial_cmd( const String &cmd, int speed_percent ) {
     float speed = speed_percent * MAX_SPEED / 100;
@@ -310,25 +316,25 @@ bool process_serial_cmd( const String &cmd, int speed_percent ) {
 
 // movement callbacks
 void before_forward( float speed ) {
-    // tone( BEEPER_PIN, speed / 10  );
+    //tone( BEEPER_PIN, speed / 10  );
 
     digitalWrite( FORWARD_LIGHTS_PIN, HIGH );
 }
 
 void before_backward( float speed ) {
-    // tone( BEEPER_PIN, speed / 5 );
+    //tone( BEEPER_PIN, speed / 5 );
 
     digitalWrite( BACKWARD_LIGHTS_PIN, HIGH );
 }
 
 void after_forward( float speed ) {
-    // noTone( BEEPER_PIN );
+    //noTone( BEEPER_PIN );
 
     digitalWrite( FORWARD_LIGHTS_PIN, LOW );
 }
 
 void after_backward( float speed ) {
-    // noTone( BEEPER_PIN );
+    //noTone( BEEPER_PIN );
 
     digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
 }
