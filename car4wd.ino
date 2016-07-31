@@ -11,8 +11,11 @@ const float SLOW      = MAX_SPEED * 0.6;
 const float AVERAGE   = MAX_SPEED * 0.8; 
 const float FAST      = MAX_SPEED * 0.8; 
 const float VERY_FAST = MAX_SPEED * 1;
+const int TICK_INTERVAL = 20; // ms
+
 float current_speed = MAX_SPEED;
-bool is_stopping_fluently = false;
+
+bool autopilot_searching_path = false;
 bool autopilot_mode = false;
 byte autopilot_dir = _FORWARD;
 
@@ -40,7 +43,7 @@ byte wheels[][3] = {
     { LEFT , REAR_AXIS , 3 }
 };
 
-CarDirect car( 2, wheels, MAX_SPEED );
+CarDirect car( 2, wheels, TICK_INTERVAL, MAX_SPEED );
 
 IRrecv irrecv( IR_RECV_PIN );
 decode_results results;
@@ -61,23 +64,7 @@ const unsigned long IR_SPEED_UP             = 0xE0E0E01F;
 const unsigned long IR_SLOW_DOWN            = 0xE0E0D02F;
 const unsigned long IR_AUTOPILOT            = 0xE0E0F00F;
 
-/*const unsigned long IR_FORWARD              = 0xCD171AFF;
-const unsigned long IR_BACKWARD             = 0x85883E95;
-const unsigned long IR_ROTATE_LEFT          = 0xE8DFBFBB;
-const unsigned long IR_ROTATE_RIGHT         = 0x2401508B;
-const unsigned long IR_DRIFT_FORWARD_LEFT   = 0x5621E826;
-const unsigned long IR_DRIFT_FORWARD_RIGHT  = 0xDF7539BA;
-const unsigned long IR_DRIFT_BACKWARD_LEFT  = 0x888B042E;
-const unsigned long IR_DRIFT_BACKWARD_RIGHT = 0x100A4C9E;
-const unsigned long IR_STOP                 = 0xFB442204;
-const unsigned long IR_SPEED_UP             = 0xF91B3490;
-const unsigned long IR_SLOW_DOWN            = 0xCF39C4E5;
-const unsigned long IR_AUTOPILOT            = 0x4B64311A;
-*/
 const unsigned int IR_TIME = 200;
-
-const unsigned int STOP_FLUENT_TIME = 1000;
-const unsigned int STOP_FLUENT_TICK = 20;
 
 const unsigned int SERIAL_TIME = 300;
 
@@ -97,7 +84,6 @@ void setup() {
  
     front_distance_sensor.begin( FRONT_US_SENSOR_ECHO_PIN, FRONT_US_SENSOR_TRIG_PIN );
     front_distance_sensor.setNullDistances( null_distances, 1 );
-
     car.set_front_distance_sensors( front_distance_sensors, 1 );
 
     car.set_rear_obstacle_sensors( rear_obstacle_sensors, 1 );
@@ -107,18 +93,7 @@ void setup() {
     pinMode( FORWARD_LIGHTS_PIN , OUTPUT );
     pinMode( BACKWARD_LIGHTS_PIN, OUTPUT );
 
-    car.set_go_callback( _FORWARD , BEFORE, before_forward  );
-    car.set_go_callback( _BACKWARD, BEFORE, before_backward );
-    car.set_go_callback( _FORWARD , AFTER , after_forward );
-    car.set_go_callback( _BACKWARD, AFTER , after_backward );
-
     // test_predefined_drive();
-
-    /* while ( 1 ) {
-        if ( !do_autopilot_move() ) {
-            break;
-        }
-    }*/
 }
 
 void loop() {
@@ -143,78 +118,112 @@ void loop() {
         }
     }
 
-    if ( cmd_processed ) {
-        is_stopping_fluently = false;
-        return;
-    }
-    
-    if ( autopilot_mode ) {
-        if ( do_autopilot_move() ) {
-            return;
+    CarState state = car.get_state();
+
+    if ( state.speed ) {
+        if ( state.dir == _FORWARD || state.is_rotating ) {
+            before_forward( state.speed );
         }
-        else {
-            autopilot_mode = false;
+        if ( state.dir == _BACKWARD || state.is_rotating ) {
+            before_backward( state.speed );
         }
     }
 
-    // нет команды на выполнение
-    if ( is_stopping_fluently ) {
-        car.stop_fluently_tick( STOP_FLUENT_TICK );
+    delay( TICK_INTERVAL );
+
+    if ( state.speed ) {
+        if ( state.dir == _FORWARD || state.is_rotating ) {
+            after_forward( state.speed );
+        }
+        if ( state.dir == _BACKWARD || state.is_rotating ) {
+            after_backward( state.speed );
+        }
     }
-    else {
-        is_stopping_fluently = true;
-        car.stop_fluently_init( STOP_FLUENT_TIME, STOP_FLUENT_TICK );
+
+    bool done_prev_action = car.process_tick();
+
+    if ( autopilot_mode ) {
+        do_autopilot_action( done_prev_action );
+        return;
+    }
+
+    if ( done_prev_action ) {
+        car.stop_fluently();
     }
 }
 
 void test_predefined_drive() {
     // вперед-назад
-    car.forward ( AVERAGE  , 3000 )
-       .forward ( FAST     , 1000 )
-       .forward ( VERY_FAST, 1000 )
-       .stop    ( 200 )
-       .backward( VERY_FAST, 1000 )
-       .backward( FAST     , 1000 )
-       .backward( AVERAGE  , 3000 )
-       .stop    ( 200 );
+    car.forward ( AVERAGE  , 3000 ).done()
+       .forward ( FAST     , 1000 ).done()
+       .forward ( VERY_FAST, 1000 ).done()
+       .stop    ()
+       .backward( VERY_FAST, 1000 ).done()
+       .backward( FAST     , 1000 ).done()
+       .backward( AVERAGE  , 3000 ).done()
+       .stop    ();
        
-    car.rotate_right( FAST, 10000 ).rotate_left( FAST, 10000 ).stop();  
+    car.rotate_right( FAST, 10000 ).done()
+       .rotate_left ( FAST, 10000 ).done()
+       .stop();  
 }
 
-// Do autopilot movement, returns whether there is no way out.
-bool do_autopilot_move() {
-    bool should_change_dir = random( 5 ) == 0;
-    int delay_ms = should_change_dir ? 2000 : 5000;
+// Starts autopilot movement, returns whether there is no way out.
+void do_autopilot_action( bool done_prev_action ) {
+    bool has_obstacle = car.has_obstacle( autopilot_dir );
+    if ( autopilot_searching_path ) {
+        if ( has_obstacle ) {
+            if ( !done_prev_action ) {
+                return; // continue to search path
+            }
+            else {
+                // search in opposite direction below
+                autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
+            }
+        }
 
-    // run till obstacle found
-    if ( autopilot_dir == _FORWARD ) {
-        car.forward( SLOW, delay_ms );
+        autopilot_searching_path = false;
     }
-    else {
-        car.backward( SLOW, delay_ms ); // should have rear sensors
+
+    if ( has_obstacle ) {
+        // start new path search
+        autopilot_searching_path = true;
+
+        if ( random( 2 ) ) {
+            car.rotate_left( MAX_SPEED, 5000 );            
+        }
+        else {
+            car.rotate_right( MAX_SPEED, 5000 );
+        }
+        return;
     }
+
+    if ( !done_prev_action ) {
+        // has action to complete
+        return;
+    }
+
+    // start new action
+
+    bool should_change_dir = random( 60000 / TICK_INTERVAL ) == 0;
 
     if ( should_change_dir ) {
         autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
         if ( random( 2 ) ) {
-            car.rotate_left( VERY_FAST, 500 );
+            car.rotate_left( VERY_FAST, 1000 );
         }
         else {
-            car.rotate_right( VERY_FAST, 500 );   
+            car.rotate_right( VERY_FAST, 1000 );   
         }
-        return true;
-    }
-    
-    if ( !car.search_path( autopilot_dir ) ) {
-        // search opposite way
-        autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
-
-        if ( !car.search_path( autopilot_dir ) ) {
-            return false;
-        }
+        return;
     }
 
-    return true;
+    if ( autopilot_dir == _FORWARD ) {
+        car.forward( SLOW, 5000 );
+    }
+    else {
+        car.backward( SLOW, 5000 ); // should have rear sensors
+    }
 }
 
 bool process_ir_press_button( unsigned long button ) {
@@ -230,15 +239,12 @@ bool process_ir_press_button( unsigned long button ) {
         prev_ir_cmd = button;
     }
     
-    Serial.println( "ir cmd" );
+    Serial.println( "IR cmd" );
     Serial.println( button, HEX );
-    // delay(500);
 
     switch ( button ) {
         case IR_FORWARD:
-            Serial.println( "movin forward" );
             car.forward( current_speed, IR_TIME );
-            Serial.println( "moved forward" );
             break;
         case IR_BACKWARD:
             car.backward( current_speed, IR_TIME );
