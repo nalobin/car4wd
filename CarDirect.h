@@ -169,8 +169,8 @@ public:
         speed = max( speed, 0          );
 
         byte analog_speed = byte( 0xFF * speed / _max_speed );
-        Serial.print( "speed " );
-        Serial.println( analog_speed );
+        // Serial.print( "speed " );
+        // Serial.println( analog_speed );
 
         wheel.motor->setSpeed( analog_speed );
         
@@ -265,12 +265,7 @@ public:
             cycles = 1;
         }
         
-        // Serial.print( "stop_fluently_init " );
-        // Serial.print( stop_fluent_time );
-        // Serial.print( " " );
-        // Serial.print( stop_fluent_tick );
-        //Serial.print( " " );
-        Serial.println( cycles );
+        // Serial.println( cycles );
 
         // Расчёт шага изменения скорости
         for ( byte axis = 0; axis < _axes; axis++ ) {
@@ -371,7 +366,7 @@ public:
         // Randomly select rotation direction
         byte rotate_dir = random( 2 );
         for ( byte try_num = 0; try_num < DISTANCE_SENSOR_PROBE_MAX; try_num++ ) {
-            Serial.println( "searching..." );
+            // Serial.println( "searching..." );
 
             bool has_obstacle = false;
 
