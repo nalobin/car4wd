@@ -28,7 +28,7 @@ struct Wheel {
 
 struct CarState {
     bool is_rotating;
-    byte dir;
+    int dir;
     float speed;
 };
 
@@ -63,7 +63,6 @@ private:
 public:
     CarDirect( byte axes, byte wheels[][3], int tick_ms, float max_speed = 4000  )
         : _axes( axes ), _max_speed( max_speed ), _do_ticks( 0 ), _tick_ms( tick_ms ),
-
         _front_distance_sensors_cnt( 0 ),
         _rear_distance_sensors_cnt( 0 ),
         _front_obstacle_sensors_cnt( 0 ),
@@ -102,7 +101,7 @@ public:
             wheel.motor->run( RELEASE );
         }
 
-        wheel.speed = wheel.speed_step = 0;
+        wheel.speed = 0;
 
         return *this;
     }
@@ -165,7 +164,7 @@ public:
         return *this;
     }
 
-    bool has_obstacle( byte dir ) {
+    bool has_obstacle( byte dir, int min_distance = DISTANCE_SENSOR_MIN_DISTANCE ) {
         if ( dir == _FORWARD  && !_front_distance_sensors_cnt && !_front_obstacle_sensors_cnt
             || dir == _BACKWARD && !_rear_distance_sensors_cnt  && !_rear_obstacle_sensors_cnt  ) {
             // no sensors to check
@@ -195,7 +194,7 @@ public:
             int cm = sensor->getDistanceCentimeter();
             Serial.println( "Distance sensor check" );
             Serial.println( cm );
-            if ( cm > 0 && cm < DISTANCE_SENSOR_MIN_DISTANCE ) {
+            if ( cm > 0 && cm < min_distance ) {
                 return true;
             }
         }
@@ -208,7 +207,8 @@ public:
         CarState state;
 
         state.speed = 0;
-        byte dir_wheels[2];
+        state.dir = -1;
+        byte dir_wheels[2] = { 0, 0 };
         for ( byte axis = 0; axis < _axes; axis++ ) {
             for ( byte side = LEFT; side <= RIGHT; side++  ) {
                 dir_wheels[ this->_wheels[ side ][ axis ].dir ]++;
@@ -216,40 +216,29 @@ public:
             }
         }
 
+        state.is_rotating = false;
         if ( dir_wheels[_FORWARD] == _axes * 2 ) {
-            state.is_rotating = false;
             state.dir = _FORWARD;
         }
         else if ( dir_wheels[_BACKWARD] == _axes * 2 ) {
-            state.is_rotating = false;
             state.dir = _BACKWARD;
         }
-        else {
+        else if ( state.speed ) {
             state.is_rotating = true;
         }
 
         return state;
     }
 
+    // process tick events and returns true if processing should continue
     bool process_tick() {
-        if ( --_do_ticks <= 0 ) {
+
+        if ( _do_ticks <= 0 ) {
             // current action processed
             return false;
         }
 
-        // get current car direction
-        CarState state = this->get_state();
-
-        if ( state.is_rotating ) {
-            // do not check sensors
-            return false;
-        }
-
-        if ( this->has_obstacle( state.dir ) ) {
-            _do_ticks = 0;
-            this->stop(); // force stop
-            return false;
-        }
+        --_do_ticks;
 
         // Изменение скорости (если оно задано)
         for ( byte axis = 0; axis < _axes; axis++ ) {
@@ -263,6 +252,19 @@ public:
                     );
                 }
             }
+        }
+
+        // get current car direction
+        CarState state = this->get_state();
+
+        if ( state.is_rotating ) {
+            // do not check sensors
+            return true;
+        }
+
+        if ( this->has_obstacle( state.dir ) ) {
+            this->stop(); // force stop
+            return false;
         }
 
         // no obstacles found and has ticks todo
@@ -284,6 +286,8 @@ public:
             this->brake_wheel( LEFT , axis, 1 );
             this->brake_wheel( RIGHT, axis, 1 );
         }
+
+        _do_ticks = 0;
 
         return *this;
     }

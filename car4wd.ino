@@ -140,7 +140,7 @@ void loop() {
         }
     }
 
-    bool done_prev_action = car.process_tick();
+    bool done_prev_action = !car.process_tick();
 
     if ( autopilot_mode ) {
         do_autopilot_action( done_prev_action );
@@ -148,7 +148,12 @@ void loop() {
     }
 
     if ( done_prev_action ) {
-        car.stop_fluently();
+        if ( state.speed && !state.is_rotating ) {
+            car.stop_fluently( 200 );
+        }
+        else {
+            car.stop();
+        }
     }
 }
 
@@ -170,32 +175,34 @@ void test_predefined_drive() {
 
 // Starts autopilot movement, returns whether there is no way out.
 void do_autopilot_action( bool done_prev_action ) {
-    bool has_obstacle = car.has_obstacle( autopilot_dir );
     if ( autopilot_searching_path ) {
-        if ( has_obstacle ) {
-            if ( !done_prev_action ) {
-                return; // continue to search path
-            }
-            else {
-                // search in opposite direction below
+        if ( car.has_obstacle( autopilot_dir, DISTANCE_SENSOR_MIN_DISTANCE * 2 ) ) {
+            if ( done_prev_action ) {
+                // continue to search path  in opposite direction
                 autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
             }
+
+            return; // continue to search path
         }
 
+        // path found
         autopilot_searching_path = false;
+        car.stop();
+        return; 
     }
 
-    if ( has_obstacle ) {
+    // not searching a path
+    if ( car.has_obstacle( autopilot_dir ) ) {
         // start new path search
         autopilot_searching_path = true;
 
         if ( random( 2 ) ) {
-            car.rotate_left( MAX_SPEED, 5000 );            
+            car.rotate_left( MAX_SPEED, 1000 );            
         }
         else {
-            car.rotate_right( MAX_SPEED, 5000 );
+            car.rotate_right( MAX_SPEED, 1000 );
         }
-        return;
+        return; // new search just started
     }
 
     if ( !done_prev_action ) {
@@ -205,24 +212,25 @@ void do_autopilot_action( bool done_prev_action ) {
 
     // start new action
 
-    bool should_change_dir = random( 60000 / TICK_INTERVAL ) == 0;
+    // change direction randomly
+    bool should_change_dir = random( 20 ) == 0;
 
     if ( should_change_dir ) {
         autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
         if ( random( 2 ) ) {
-            car.rotate_left( VERY_FAST, 1000 );
+            car.rotate_left( MAX_SPEED, 1000 );
         }
         else {
-            car.rotate_right( VERY_FAST, 1000 );   
+            car.rotate_right( MAX_SPEED, 1000 );   
         }
         return;
     }
 
     if ( autopilot_dir == _FORWARD ) {
-        car.forward( SLOW, 5000 );
+        car.forward( current_speed, 5000 );
     }
     else {
-        car.backward( SLOW, 5000 ); // should have rear sensors
+        car.backward( current_speed, 5000 ); // should have rear sensors
     }
 }
 
@@ -250,10 +258,10 @@ bool process_ir_press_button( unsigned long button ) {
             car.backward( current_speed, IR_TIME );
             break;
         case IR_ROTATE_LEFT:
-            car.rotate_left( current_speed, IR_TIME );
+            car.rotate_left( MAX_SPEED, IR_TIME / 4 );
             break;
         case IR_ROTATE_RIGHT:
-            car.rotate_right( current_speed, IR_TIME );
+            car.rotate_right( MAX_SPEED, IR_TIME / 4 );
             break;
         case IR_DRIFT_FORWARD_LEFT:
             car.drift_forward_left( current_speed, IR_TIME );
@@ -275,14 +283,23 @@ bool process_ir_press_button( unsigned long button ) {
             if ( current_speed > MAX_SPEED ) {
                 current_speed = MAX_SPEED;
             }
+            if ( autopilot_mode ) {
+                car.stop();
+            }
             break;
         case IR_SLOW_DOWN:
             current_speed = current_speed  - VERY_SLOW;
             if ( current_speed < VERY_SLOW || current_speed > MAX_SPEED ) {
                 current_speed = VERY_SLOW;
             }
+            if ( autopilot_mode ) {
+                car.stop();
+            }
             break;
          case IR_AUTOPILOT:
+            if ( autopilot_mode ) {
+                car.stop();
+            }
             autopilot_mode = !autopilot_mode;
             return false;
         default:
@@ -325,6 +342,10 @@ bool process_serial_cmd( const String &cmd, int speed_percent ) {
         car.stop();
     }
     else if ( cmd == "autopilot" ) {
+        if ( autopilot_mode ) {
+            car.stop();
+        }
+
         autopilot_mode = !autopilot_mode;
         return false;
     }
