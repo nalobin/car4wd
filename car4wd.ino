@@ -18,6 +18,7 @@ float current_speed = MAX_SPEED;
 bool autopilot_searching_path = false;
 bool autopilot_mode = false;
 byte autopilot_dir = _FORWARD;
+unsigned int ticks = 0;
 
 // переводит расстояние в см и скорость в скорость и время в мс
 #define l2t( speed, length ) ( speed ), ( ( length ) / ( speed ) * 60000 )
@@ -51,20 +52,20 @@ decode_results results;
 unsigned long prev_ir_cmd = 0;
 
 // Коды кнопок IR пульта
-const unsigned long IR_FORWARD              = 0x6604CFFA;
-const unsigned long IR_BACKWARD             = 0x6604CFC6;
-const unsigned long IR_ROTATE_LEFT          = 0x6604CFD6;
-const unsigned long IR_ROTATE_RIGHT         = 0x6604CFE6;
-const unsigned long IR_DRIFT_FORWARD_LEFT   = 0x6604CFE0;
+const unsigned long IR_FORWARD              = 0xE0E006F9;
+const unsigned long IR_BACKWARD             = 0xE0E08679;
+const unsigned long IR_ROTATE_LEFT          = 0xE0E0A659;
+const unsigned long IR_ROTATE_RIGHT         = 0xE0E046B9;
+const unsigned long IR_DRIFT_FORWARD_LEFT   = 0xE0E020DF;
 const unsigned long IR_DRIFT_FORWARD_RIGHT  = 0x6604CFF0;
-const unsigned long IR_DRIFT_BACKWARD_LEFT  = 0x6604CFF8;
-const unsigned long IR_DRIFT_BACKWARD_RIGHT = 0x6604CFE4;
-const unsigned long IR_STOP                 = 0x6604CFE8;
+const unsigned long IR_DRIFT_BACKWARD_LEFT  = 0xE0E030CF;
+const unsigned long IR_DRIFT_BACKWARD_RIGHT = 0xE0E0708F;
+const unsigned long IR_STOP                 = 0xE0E0906F;
 const unsigned long IR_SPEED_UP             = 0xE0E0E01F;
 const unsigned long IR_SLOW_DOWN            = 0xE0E0D02F;
 const unsigned long IR_AUTOPILOT            = 0xE0E0F00F;
 
-const unsigned int IR_TIME = 200;
+const unsigned int IR_TIME = 2000;
 
 const unsigned int SERIAL_TIME = 300;
 
@@ -121,26 +122,36 @@ void loop() {
     CarState state = car.get_state();
 
     if ( state.speed ) {
-        if ( state.dir == _FORWARD || state.is_rotating ) {
+        if( state.is_rotating ) {
+            before_rotation( state.speed );
+        }
+        else if ( state.dir == _FORWARD ) {
             before_forward( state.speed );
         }
-        if ( state.dir == _BACKWARD || state.is_rotating ) {
+        else if ( state.dir == _BACKWARD  ) {
             before_backward( state.speed );
         }
+    }
+    else {
+        on_stop();
     }
 
     delay( TICK_INTERVAL );
 
     if ( state.speed ) {
-        if ( state.dir == _FORWARD || state.is_rotating ) {
+        if( state.is_rotating ) {
+            after_rotation( state.speed );
+        }
+        else if ( state.dir == _FORWARD ) {
             after_forward( state.speed );
         }
-        if ( state.dir == _BACKWARD || state.is_rotating ) {
+        else if ( state.dir == _BACKWARD ) {
             after_backward( state.speed );
         }
     }
 
     bool done_prev_action = !car.process_tick();
+    ++ticks;
 
     if ( autopilot_mode ) {
         do_autopilot_action( done_prev_action );
@@ -149,7 +160,7 @@ void loop() {
 
     if ( done_prev_action ) {
         if ( state.speed && !state.is_rotating ) {
-            car.stop_fluently( 200 );
+            car.stop_fluently( 2000 );
         }
         else {
             car.stop();
@@ -197,10 +208,10 @@ void do_autopilot_action( bool done_prev_action ) {
         autopilot_searching_path = true;
 
         if ( random( 2 ) ) {
-            car.rotate_left( MAX_SPEED, 1000 );            
+            car.rotate_left( MAX_SPEED, 3000 );            
         }
         else {
-            car.rotate_right( MAX_SPEED, 1000 );
+            car.rotate_right( MAX_SPEED, 3000 );
         }
         return; // new search just started
     }
@@ -213,15 +224,15 @@ void do_autopilot_action( bool done_prev_action ) {
     // start new action
 
     // change direction randomly
-    bool should_change_dir = random( 20 ) == 0;
+    bool should_change_dir = random( 5 ) == 0;
 
     if ( should_change_dir ) {
         autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
         if ( random( 2 ) ) {
-            car.rotate_left( MAX_SPEED, 1000 );
+            car.rotate_left( MAX_SPEED, 2000 );
         }
         else {
-            car.rotate_right( MAX_SPEED, 1000 );   
+            car.rotate_right( MAX_SPEED, 2000 );   
         }
         return;
     }
@@ -362,23 +373,43 @@ bool process_serial_cmd( const String &cmd, int speed_percent ) {
 void before_forward( float speed ) {
     //tone( BEEPER_PIN, speed / 10  );
 
-    digitalWrite( FORWARD_LIGHTS_PIN, HIGH );
+    if ( ticks % 10 == 0 ) {
+        digitalWrite( FORWARD_LIGHTS_PIN, digitalRead( FORWARD_LIGHTS_PIN ) == HIGH ? LOW : HIGH );
+    }
+    digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
 }
 
 void before_backward( float speed ) {
     //tone( BEEPER_PIN, speed / 5 );
 
-    digitalWrite( BACKWARD_LIGHTS_PIN, HIGH );
+    digitalWrite( FORWARD_LIGHTS_PIN , LOW );
+    if ( ticks % 10 == 0 ) {
+        digitalWrite( BACKWARD_LIGHTS_PIN, digitalRead( BACKWARD_LIGHTS_PIN ) == HIGH ? LOW : HIGH );
+    }
+}
+
+void before_rotation( float speed ) {
+    //tone( BEEPER_PIN, speed / 5 );
+
+    if ( ticks % 10 == 0 ) {
+        digitalWrite( FORWARD_LIGHTS_PIN , digitalRead( FORWARD_LIGHTS_PIN  ) == HIGH ? LOW : HIGH );
+        digitalWrite( BACKWARD_LIGHTS_PIN, digitalRead( BACKWARD_LIGHTS_PIN ) == HIGH ? LOW : HIGH );
+    }
 }
 
 void after_forward( float speed ) {
     //noTone( BEEPER_PIN );
-
-    digitalWrite( FORWARD_LIGHTS_PIN, LOW );
 }
 
 void after_backward( float speed ) {
     //noTone( BEEPER_PIN );
+}
 
+void after_rotation( float speed ) {
+    //noTone( BEEPER_PIN );
+}
+
+void on_stop() {
+    digitalWrite( FORWARD_LIGHTS_PIN , LOW );
     digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
 }

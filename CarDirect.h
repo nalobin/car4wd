@@ -107,7 +107,7 @@ public:
     }
 
     CarDirect &rotate_wheel( byte side, byte axis, byte dir, float speed ) {
-        this->brake_wheel( side, axis, 0 );
+        // this->brake_wheel( side, axis, 0 );
 
         Wheel &wheel = this->_wheels[ side ][ axis ];
 
@@ -115,6 +115,7 @@ public:
 
         speed = min( speed, _max_speed );
         speed = max( speed, 0          );
+
 
         byte analog_speed = byte( 0xFF * speed / _max_speed );
 
