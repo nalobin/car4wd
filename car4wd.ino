@@ -108,13 +108,10 @@ void loop() {
     
     if ( !cmd_processed ) {
         // процессим команды с serial port
-        if ( Serial.available() > 0 && Serial.find( "DO " ) ) {
-            char cmd[128];
-            if ( Serial.readBytesUntil( ':', cmd, sizeof( cmd ) ) ) {
-                int speed_percent = Serial.parseInt();
-                if ( speed_percent ) {
-                    cmd_processed = process_serial_cmd( String( cmd ), speed_percent );
-                }
+        if ( Serial.available() > 0 && Serial.find( "go " ) ) {
+            if ( String string = Serial.readString() ) {
+                Serial.println( string );
+                cmd_processed = process_serial_cmd( string );
             }
         }
     }
@@ -322,32 +319,31 @@ bool process_ir_press_button( unsigned long button ) {
     return true;
 }
 
-bool process_serial_cmd( const String &cmd, int speed_percent ) {
-    float speed = speed_percent * MAX_SPEED / 100;
+bool process_serial_cmd( const String &cmd ) {
 
     if ( cmd == "forward" ) {
-        car.forward( speed, SERIAL_TIME );
+        car.forward( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "backward" ) {
-        car.backward( speed, SERIAL_TIME );
+        car.backward( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "rotate_left" ) {
-        car.rotate_left( speed, SERIAL_TIME );
+        car.rotate_left( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "rotate_right" ) {
-        car.rotate_right( speed, SERIAL_TIME );
+        car.rotate_right( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "drift_forward_left" ) {
-        car.drift_forward_left( speed, SERIAL_TIME );
+        car.drift_forward_left( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "drift_forward_right" ) {
-        car.drift_forward_right( speed, SERIAL_TIME );
+        car.drift_forward_right( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "drift_backward_left" ) {
-        car.drift_backward_left( speed, SERIAL_TIME );
+        car.drift_backward_left( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "drift_backward_right" ) {
-        car.drift_backward_right( speed, SERIAL_TIME );
+        car.drift_backward_right( current_speed, SERIAL_TIME );
     }
     else if ( cmd == "stop" ) {
         car.stop();
