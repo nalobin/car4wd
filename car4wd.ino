@@ -13,7 +13,7 @@ const float FAST      = MAX_SPEED * 0.8;
 const float VERY_FAST = MAX_SPEED * 1;
 const int TICK_INTERVAL = 20; // ms
 
-float current_speed = MAX_SPEED;
+float current_speed = SLOW;
 
 bool autopilot_searching_path = false;
 bool autopilot_mode = false;
@@ -26,14 +26,9 @@ unsigned int ticks = 0;
 const byte FRONT_AXIS = 0;
 const byte REAR_AXIS  = 1;
 
-const byte BEEPER_PIN          = A7;
-// pins
-const byte FRONT_US_SENSOR_ECHO_PIN  = A0; // 14 
-const byte FRONT_US_SENSOR_TRIG_PIN  = A1;
-const byte BACK_IR_SENSOR_PIN  = A2;
-const byte FORWARD_LIGHTS_PIN  = A3;
-const byte BACKWARD_LIGHTS_PIN = A4;
-const byte IR_RECV_PIN         = A5;
+const byte BEEPER_PIN          = A11;
+const byte FORWARD_LIGHTS_PIN  = 26;
+const byte BACKWARD_LIGHTS_PIN = 27;
 
 // free digital pins of Motor Shield 2, 13 (+9,10 if no servos)
 
@@ -46,13 +41,27 @@ byte wheels[][3] = {
 
 CarDirect car( 2, wheels, TICK_INTERVAL, MAX_SPEED );
 
-IRrecv irrecv( IR_RECV_PIN );
+IRrecv irrecv( A5 );
 decode_results results;
 
 unsigned long prev_ir_cmd = 0;
 
 // Коды кнопок IR пульта
-const unsigned long IR_FORWARD              = 0xE0E006F9;
+const unsigned long IR_FORWARD              = 0x88877;
+const unsigned long IR_BACKWARD             = 0x8A857;
+const unsigned long IR_ROTATE_LEFT          = 0x848B7;
+const unsigned long IR_ROTATE_RIGHT         = 0x828D7;
+const unsigned long IR_DRIFT_FORWARD_LEFT   = 0x8C03F;
+const unsigned long IR_DRIFT_FORWARD_RIGHT  = 0x8A05F;
+const unsigned long IR_DRIFT_BACKWARD_LEFT  = 0x8906F;
+const unsigned long IR_DRIFT_BACKWARD_RIGHT = 0x8D02F;
+const unsigned long IR_STOP                 = 0x8C837;
+const unsigned long IR_SPEED_UP             = 0x8F807;
+const unsigned long IR_SLOW_DOWN            = 0x802FD;
+const unsigned long IR_AUTOPILOT            = 0x838C7;
+
+// Коды кнопок IR пульта Samsung
+/*const unsigned long IR_FORWARD              = 0xE0E006F9;
 const unsigned long IR_BACKWARD             = 0xE0E08679;
 const unsigned long IR_ROTATE_LEFT          = 0xE0E0A659;
 const unsigned long IR_ROTATE_RIGHT         = 0xE0E046B9;
@@ -64,7 +73,7 @@ const unsigned long IR_STOP                 = 0xE0E0906F;
 const unsigned long IR_SPEED_UP             = 0xE0E0E01F;
 const unsigned long IR_SLOW_DOWN            = 0xE0E0D02F;
 const unsigned long IR_AUTOPILOT            = 0xE0E0F00F;
-
+*/
 const unsigned int IR_TIME = 2000;
 
 const unsigned int SERIAL_TIME = 300;
@@ -73,24 +82,31 @@ const unsigned int SERIAL_TIME = 300;
 // включить только если реально подключен. иначе будет крутить вечно
 DistanceSRF04 front_distance_sensor;
 DistanceSensor *front_distance_sensors[] = { &front_distance_sensor };
-int null_distances[] = { 8 };
+DistanceSRF04 rear_distance_sensor;
+DistanceSensor *rear_distance_sensors[] = { &rear_distance_sensor };
 
-ObstacleSensor obstacle_sensor = ObstacleSensor( BACK_IR_SENSOR_PIN );
-ObstacleSensor *rear_obstacle_sensors[] = { &obstacle_sensor };
+ObstacleSensor left_front_obstacle_sensor  = ObstacleSensor( 22 );
+ObstacleSensor right_front_obstacle_sensor = ObstacleSensor( 23 );
+ObstacleSensor *front_obstacle_sensors[] = { &left_front_obstacle_sensor, &right_front_obstacle_sensor };
 
 void setup() {
     Serial.begin( 9600 );
     Serial.setTimeout( 50 );
+    Serial1.begin( 9600 );
+    Serial1.setTimeout( 50 );
     irrecv.enableIRIn(); // Конфликтует с M1, M2 на Motor Shield
  
-    front_distance_sensor.begin( FRONT_US_SENSOR_ECHO_PIN, FRONT_US_SENSOR_TRIG_PIN );
-    front_distance_sensor.setNullDistances( null_distances, 1 );
+    front_distance_sensor.begin( A3, A4 ); // echo, trigger
+    // int null_distances[] = { 8 };
+    // front_distance_sensor.setNullDistances( null_distances, 1 );
     car.set_front_distance_sensors( front_distance_sensors, 1 );
+    car.set_front_obstacle_sensors( front_obstacle_sensors, 2 );
 
-    car.set_rear_obstacle_sensors( rear_obstacle_sensors, 1 );
+    rear_distance_sensor.begin( A2, A1 ); // echo, trigger
+    car.set_rear_distance_sensors( rear_distance_sensors, 1 );
+    // car.set_rear_obstacle_sensors( rear_obstacle_sensors, 2 );
 
     pinMode( BEEPER_PIN         , OUTPUT );
-    pinMode( BACK_IR_SENSOR_PIN , INPUT  );
     pinMode( FORWARD_LIGHTS_PIN , OUTPUT );
     pinMode( BACKWARD_LIGHTS_PIN, OUTPUT );
 
@@ -107,11 +123,23 @@ void loop() {
     }
     
     if ( !cmd_processed ) {
-        // процессим команды с serial port
-        if ( Serial.available() > 0 && Serial.find( "go " ) ) {
-            if ( String string = Serial.readString() ) {
-                Serial.println( string );
-                cmd_processed = process_serial_cmd( string );
+        // Процессим команды с serial port.
+        if ( Serial1.available() > 0 ) {
+            if ( String str = Serial1.readString() ) {
+                String prev_cmd;
+                for ( int i = 0; i < str.length(); i++ ) {
+                    // Символ — отдельная команда.
+                    String cmd( str.charAt( i ) );
+
+                    // не дублируем последнюю выполненную команду для большей интерактивности
+                    if ( cmd == prev_cmd ) {
+                        continue;
+                    }
+
+                    Serial.println( cmd );
+                    cmd_processed = process_serial_cmd( cmd );
+                    prev_cmd = cmd;
+                }
             }
         }
     }
@@ -187,7 +215,7 @@ void do_autopilot_action( bool done_prev_action ) {
         if ( car.has_obstacle( autopilot_dir, DISTANCE_SENSOR_MIN_DISTANCE * 2 ) ) {
             if ( done_prev_action ) {
                 // continue to search path  in opposite direction
-                autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
+                // autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
             }
 
             return; // continue to search path
@@ -205,10 +233,10 @@ void do_autopilot_action( bool done_prev_action ) {
         autopilot_searching_path = true;
 
         if ( random( 2 ) ) {
-            car.rotate_left( MAX_SPEED, 3000 );            
+            car.rotate_left( current_speed, 5000 );            
         }
         else {
-            car.rotate_right( MAX_SPEED, 3000 );
+            car.rotate_right( current_speed, 5000 );
         }
         return; // new search just started
     }
@@ -221,18 +249,18 @@ void do_autopilot_action( bool done_prev_action ) {
     // start new action
 
     // change direction randomly
-    bool should_change_dir = random( 5 ) == 0;
+/*    bool should_change_dir = random( 20 ) == 0;
 
     if ( should_change_dir ) {
         autopilot_dir = autopilot_dir == _FORWARD ? _BACKWARD: _FORWARD;
         if ( random( 2 ) ) {
-            car.rotate_left( MAX_SPEED, 2000 );
+            car.rotate_left( current_speed, 4000 );
         }
         else {
-            car.rotate_right( MAX_SPEED, 2000 );   
+            car.rotate_right( current_speed, 4000 );   
         }
         return;
-    }
+    }*/
 
     if ( autopilot_dir == _FORWARD ) {
         car.forward( current_speed, 5000 );
@@ -266,10 +294,10 @@ bool process_ir_press_button( unsigned long button ) {
             car.backward( current_speed, IR_TIME );
             break;
         case IR_ROTATE_LEFT:
-            car.rotate_left( MAX_SPEED, IR_TIME / 4 );
+            car.rotate_left( current_speed, IR_TIME / 4 );
             break;
         case IR_ROTATE_RIGHT:
-            car.rotate_right( MAX_SPEED, IR_TIME / 4 );
+            car.rotate_right( current_speed, IR_TIME / 4 );
             break;
         case IR_DRIFT_FORWARD_LEFT:
             car.drift_forward_left( current_speed, IR_TIME );
@@ -321,34 +349,51 @@ bool process_ir_press_button( unsigned long button ) {
 
 bool process_serial_cmd( const String &cmd ) {
 
-    if ( cmd == "forward" ) {
+    if ( cmd == "F" ) {
         car.forward( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "backward" ) {
+    else if ( cmd == "B" ) {
         car.backward( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "rotate_left" ) {
+    else if ( cmd == "L" ) {
         car.rotate_left( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "rotate_right" ) {
+    else if ( cmd == "R" ) {
         car.rotate_right( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "drift_forward_left" ) {
+    else if ( cmd == "G" ) {
         car.drift_forward_left( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "drift_forward_right" ) {
+    else if ( cmd == "I" ) {
         car.drift_forward_right( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "drift_backward_left" ) {
+    else if ( cmd == "H" ) {
         car.drift_backward_left( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "drift_backward_right" ) {
+    else if ( cmd == "J" ) {
         car.drift_backward_right( current_speed, SERIAL_TIME );
     }
-    else if ( cmd == "stop" ) {
-        car.stop();
+    else if ( cmd == "S" ) {
+        if ( !autopilot_mode ) {
+            car.stop();
+        }
     }
-    else if ( cmd == "autopilot" ) {
+    else if ( cmd == "0" || cmd == "1" || cmd == "2" ) {
+        current_speed = VERY_SLOW;
+    }
+    else if ( cmd == "3" || cmd == "4" ) {
+        current_speed = SLOW;
+    }
+    else if ( cmd == "5" || cmd == "6" ) {
+        current_speed = AVERAGE;
+    }
+    else if ( cmd == "7" || cmd == "8" ) {
+        current_speed = FAST;
+    }
+    else if ( cmd == "9" || cmd == "10"  || cmd == "q" ) {
+        current_speed = VERY_FAST;
+    }
+    else if ( cmd == "X" || cmd == "x" ) {
         if ( autopilot_mode ) {
             car.stop();
         }

@@ -17,7 +17,7 @@ const byte AFTER  = 1;
 const byte _FORWARD = 0;
 const byte _BACKWARD = 1;
 
-const int DISTANCE_SENSOR_MIN_DISTANCE = 40; // cm
+const int DISTANCE_SENSOR_MIN_DISTANCE = 30; // cm
 
 struct Wheel {
     AF_DCMotor *motor;
@@ -311,13 +311,23 @@ public:
     }
 
     CarDirect &forward( float speed, int delay_ms = 1000 ) {
-        this->go( speed, delay_ms, 1.0, 1.0 );
+        if ( this->has_obstacle( _FORWARD ) ) {
+            this->stop();
+        }
+        else {
+            this->go( speed, delay_ms, 1.0, 1.0 );
+        }
 
         return *this;
     }
 
     CarDirect &backward( float speed, int delay_ms = 1000 ) {
-        this->go( speed, delay_ms, -1.0, -1.0 );
+        if ( this->has_obstacle( _BACKWARD ) ) {
+            this->stop();
+        }
+        else {
+           this->go( speed, delay_ms, -1.0, -1.0 );
+        }
 
         return *this;
     }

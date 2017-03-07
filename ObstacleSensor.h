@@ -9,6 +9,7 @@ private:
 public:
     ObstacleSensor( byte ir_sensor_pin )
         :  _ir_sensor_pin( ir_sensor_pin ) {
+        pinMode( ir_sensor_pin, INPUT );
     }
 
     bool has_obstacle() {
