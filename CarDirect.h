@@ -359,19 +359,19 @@ public:
     }
 
     // drift sugar
-    CarDirect &drift_forward_left( float speed, int delay_ms = 1000, float coef = 0.4 ) {
+    CarDirect &drift_forward_left( float speed, int delay_ms = 1000, float coef = 0.2 ) {
         this->drift( LEFT, _FORWARD, speed, delay_ms, coef );
         return *this;
     }
-    CarDirect &drift_forward_right( float speed, int delay_ms = 1000, float coef = 0.4 ) {
+    CarDirect &drift_forward_right( float speed, int delay_ms = 1000, float coef = 0.2 ) {
         this->drift( RIGHT, _FORWARD, speed, delay_ms, coef );
         return *this;
     }
-    CarDirect &drift_backward_left( float speed, int delay_ms = 1000, float coef = 0.4 ) {
+    CarDirect &drift_backward_left( float speed, int delay_ms = 1000, float coef = 0.2 ) {
         this->drift( LEFT, _BACKWARD, speed, delay_ms, coef );
         return *this;
     }
-    CarDirect &drift_backward_right( float speed, int delay_ms = 1000, float coef = 0.4 ) {
+    CarDirect &drift_backward_right( float speed, int delay_ms = 1000, float coef = 0.2 ) {
         this->drift( RIGHT, _BACKWARD, speed, delay_ms, coef );
         return *this;
     }
