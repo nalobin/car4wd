@@ -20,6 +20,9 @@ bool autopilot_mode = false;
 byte autopilot_dir = _FORWARD;
 unsigned int ticks = 0;
 
+bool front_lights_on = false;
+bool back_lights_on  = false;
+
 // переводит расстояние в см и скорость в скорость и время в мс
 #define l2t( speed, length ) ( speed ), ( ( length ) / ( speed ) * 60000 )
 
@@ -378,6 +381,22 @@ bool process_serial_cmd( const String &cmd ) {
             car.stop();
         }
     }
+    else if ( cmd == "W" ) {
+        digitalWrite( FORWARD_LIGHTS_PIN, HIGH );
+        front_lights_on = true;
+    }
+    else if ( cmd == "w" ) {
+        digitalWrite( FORWARD_LIGHTS_PIN, LOW );
+        front_lights_on = false;
+    }
+    else if ( cmd == "U" ) {
+        digitalWrite( BACKWARD_LIGHTS_PIN, HIGH );
+        back_lights_on = true;
+    }
+    else if ( cmd == "u" ) {
+        digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
+        back_lights_on = false;
+    }
     else if ( cmd == "0" || cmd == "1" || cmd == "2" ) {
         current_speed = VERY_SLOW;
     }
@@ -414,17 +433,23 @@ bool process_serial_cmd( const String &cmd ) {
 void before_forward( float speed ) {
     //tone( BEEPER_PIN, speed / 10  );
 
-    if ( ticks % 10 == 0 ) {
+    if ( ticks % 2 == 0 && !front_lights_on ) {
         digitalWrite( FORWARD_LIGHTS_PIN, digitalRead( FORWARD_LIGHTS_PIN ) == HIGH ? LOW : HIGH );
     }
-    digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
+
+    if ( !back_lights_on ) {
+        digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
+    }
 }
 
 void before_backward( float speed ) {
     //tone( BEEPER_PIN, speed / 5 );
 
-    digitalWrite( FORWARD_LIGHTS_PIN , LOW );
-    if ( ticks % 10 == 0 ) {
+    if ( !front_lights_on ) {
+        digitalWrite( FORWARD_LIGHTS_PIN , LOW );
+    }
+
+    if ( ticks % 2 == 0 && !back_lights_on ) {
         digitalWrite( BACKWARD_LIGHTS_PIN, digitalRead( BACKWARD_LIGHTS_PIN ) == HIGH ? LOW : HIGH );
     }
 }
@@ -432,11 +457,18 @@ void before_backward( float speed ) {
 void before_rotation( float speed ) {
     //tone( BEEPER_PIN, speed / 5 );
 
-    if ( ticks % 10 == 0 ) {
+    if ( ticks % 2 != 0 ) {
+        return;
+    }
+
+    if ( !front_lights_on ) {
         digitalWrite( FORWARD_LIGHTS_PIN , digitalRead( FORWARD_LIGHTS_PIN  ) == HIGH ? LOW : HIGH );
+    }
+
+    if ( !back_lights_on ) {
         digitalWrite( BACKWARD_LIGHTS_PIN, digitalRead( BACKWARD_LIGHTS_PIN ) == HIGH ? LOW : HIGH );
     }
-}
+ }
 
 void after_forward( float speed ) {
     //noTone( BEEPER_PIN );
@@ -451,6 +483,11 @@ void after_rotation( float speed ) {
 }
 
 void on_stop() {
-    digitalWrite( FORWARD_LIGHTS_PIN , LOW );
-    digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
+    if ( !front_lights_on ) {
+        digitalWrite( FORWARD_LIGHTS_PIN , LOW );
+    }
+
+    if ( !back_lights_on ) {
+        digitalWrite( BACKWARD_LIGHTS_PIN, LOW );
+    }
 }
